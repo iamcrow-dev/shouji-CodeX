@@ -1,0 +1,49 @@
+{
+  "name": "codex-host-app",
+  "version": "1.1.0",
+  "private": true,
+  "description": "CodeX桌面端by.冰点零度",
+  "author": "qwe",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.js && node --check src/config-store.js && node --check src/service/token.js && node --check src/service/codex-bridge.js && node --check src/service/host-service.js && node --check src/renderer/app.js",
+    "dist:mac": "electron-builder --mac dmg zip"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.qwe.codexhost",
+    "productName": "CodeX桌面端by.冰点零度",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/codex-icon.icns",
+      "extendInfo": {
+        "CFBundleShortVersionString": "1.1",
+        "CFBundleVersion": "1.1"
+      }
+    },
+    "dmg": {}
+  }
+}

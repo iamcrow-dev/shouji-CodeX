@@ -1,0 +1,16 @@
+.DS_Store
+
+# Android
+**/.gradle/
+**/.idea/
+**/.kotlin/
+**/build/
+**/local.properties
+
+# Node/Electron
+**/node_modules/
+**/dist/
+**/tmp/
+
+# Logs
+*.log
