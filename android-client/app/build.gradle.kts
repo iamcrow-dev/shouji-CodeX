@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.okhttp)
     implementation(libs.markwon.core)
+    implementation(libs.markwon.ext.tables)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

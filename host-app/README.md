@@ -1,56 +1,63 @@
-# CodeX 主机
+# CodeX桌面端by.冰点零度（Host App）
 
-一个用于承载移动端接入的本机桌面 Host App 原型。当前版本包含：
+桌面端 Host 服务，负责把手机端请求桥接到 `codex app-server`。
 
-- 中文 GUI 主界面
-- 固定端口 `333`
-- 32 字符访问令牌
-- 启动/停止服务
-- 开机自启动开关
-- 自动启动服务开关
-- 真实接入 `codex app-server`
-- 线程列表、会话读取、发消息和中断任务
-- 待处理审批列表与审批响应接口
-- 受令牌保护的 HTTP / WebSocket 入口
+## 环境要求
 
-## 启动
+- macOS（当前打包产物：arm64）
+- Node.js 20+
+- npm
+- 本机存在 `Codex.app`：`/Applications/Codex.app`
+
+## 开发运行
 
 ```bash
 cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
 npm install
 npm start
 ```
 
-## 当前接口
+## 代码检查
+
+```bash
+cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
+npm run check
+```
+
+## 打包
+
+```bash
+cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
+npm run dist:mac
+```
+
+产物：
+
+- `dist/CodeX桌面端by.冰点零度-1.1.0-arm64.dmg`
+- `dist/CodeX桌面端by.冰点零度-1.1.0-arm64.zip`
+- `dist/mac-arm64/CodeX桌面端by.冰点零度.app`
+
+## API 概览
 
 - `GET /api/health`
 - `POST /api/connect/test`
 - `GET /api/config`
+- `POST /api/config/workspace`
 - `GET /api/threads`
 - `GET /api/threads/:id`
 - `POST /api/threads`
 - `POST /api/threads/:id/message`
 - `POST /api/threads/:id/interrupt`
+- `DELETE /api/threads/:id`
 - `GET /api/approvals`
 - `POST /api/approvals/:id/respond`
 - `GET /ws`
 
-除 `GET /api/health` 外，其他接口都要求：
+除 `GET /api/health` 外，其他接口均需：
 
 ```http
 Authorization: Bearer <token>
 ```
-
-## 说明
-
-WebSocket 会推送这些实时事件：
-
-- `thread.created`
-- `thread.updated`
-- `turn.started`
-- `turn.completed`
-- `message.delta`
-- `message.completed`
-- `approval.required`
-- `approval.resolved`
-- `thread.error`

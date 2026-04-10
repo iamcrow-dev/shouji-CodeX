@@ -95,6 +95,7 @@ import com.qwe.codexmobile.model.HostEvent
 import com.qwe.codexmobile.model.HostStats
 import com.qwe.codexmobile.model.ThreadSummary
 import io.noties.markwon.Markwon
+import io.noties.markwon.ext.tables.TablePlugin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1225,7 +1226,11 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     val background = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
     val foreground = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     val timestampColor = if (isUser) Color(0xFFD8D8D8) else Color(0xFF9A9A9A)
-    val markwon = remember(context) { Markwon.create(context) }
+    val markwon = remember(context) {
+        Markwon.builder(context)
+            .usePlugin(TablePlugin.create(context))
+            .build()
+    }
     var actionMenuVisible by remember(item.id) { mutableStateOf(false) }
     var selectionDialogVisible by remember(item.id) { mutableStateOf(false) }
     val bodyText = item.text.ifBlank { item.status.orEmpty() }
