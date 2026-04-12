@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const CODEX_BINARY_PATH = "/Applications/Codex.app/Contents/Resources/codex";
 const MOBILE_UPLOAD_DIR = ".codex-mobile-uploads";
+const MAX_THREAD_ITEMS = 500;
 
 function summarizeUserContent(contentItems = []) {
   const textLines = [];
@@ -943,22 +944,35 @@ export class CodexBridge extends EventEmitter {
 
   normalizeThreadDetail(thread) {
     const normalizedThread = this.normalizeThread(thread);
-    const items = [];
+    const flattened = [];
 
     for (const turn of thread.turns || []) {
       for (const item of turn.items || []) {
-        items.push(this.normalizeThreadItem(item, turn.id, turn));
+        flattened.push({
+          turn,
+          item
+        });
       }
     }
 
+    const limitedEntries =
+      flattened.length > MAX_THREAD_ITEMS ? flattened.slice(flattened.length - MAX_THREAD_ITEMS) : flattened;
+    const keptTurnIds = new Set(limitedEntries.map((entry) => entry.turn.id));
+    const keptItemIds = new Set(limitedEntries.map((entry) => entry.item.id));
+    const items = limitedEntries.map((entry) => this.normalizeThreadItem(entry.item, entry.turn.id, entry.turn));
+
     return {
       ...normalizedThread,
-      turns: (thread.turns || []).map((turn) => ({
-        id: turn.id,
-        status: turn.status,
-        error: turn.error,
-        items: (turn.items || []).map((item) => this.normalizeThreadItem(item, turn.id, turn))
-      })),
+      turns: (thread.turns || [])
+        .filter((turn) => keptTurnIds.has(turn.id))
+        .map((turn) => ({
+          id: turn.id,
+          status: turn.status,
+          error: turn.error,
+          items: (turn.items || [])
+            .filter((item) => keptItemIds.has(item.id))
+            .map((item) => this.normalizeThreadItem(item, turn.id, turn))
+        })),
       items
     };
   }

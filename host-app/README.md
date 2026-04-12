@@ -1,27 +1,63 @@
-# CodeX桌面端（Host App）
+# CodeX桌面端by.冰点零度（Host App）
 
 桌面端 Host 服务，负责把手机端请求桥接到 `codex app-server`。
 
-##  桌面端（host-app）功能说明
+## 环境要求
 
-## 1 功能清单
+- macOS（当前打包产物：arm64）
+- Node.js 20+
+- npm
+- 本机存在 `Codex.app`：`/Applications/Codex.app`
 
-- 启动/停止本机 Host 服务（默认端口 `333`）
-- 显示服务地址、端口、访问令牌、设备连接数、待审批数、错误信息
-- 访问令牌显示/隐藏/重置（20 位 token）
-- 开机自启动开关
-- 启动后自动开启服务开关
-- `bypass permissions` 开关（跳过审批 + 高权限策略）
-- 对外提供 HTTP + WebSocket 接口给手机端
-- 对 Codex app-server 提供线程/消息/审批桥接
-- 自动审批（开启后自动处理可支持审批类型）
-- 会话删除为逻辑删除（`deletedThreadIds`）
+## 开发运行
 
-## 2 UI 结构（桌面端）
+```bash
+cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
+npm install
+npm start
+```
 
-页面是单窗口四块布局（2x2）：
+## 代码检查
 
-1. 连接信息
-2. 服务控制
-3. 启动选项
-4. 移动端接入说明
+```bash
+cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
+npm run check
+```
+
+## 打包
+
+```bash
+cd /Users/qwe/Documents/codex/host-app
+export PATH="/usr/local/bin:$PATH"
+npm run dist:mac
+```
+
+产物：
+
+- `dist/CodeX桌面端by.冰点零度-1.1.0-arm64.dmg`
+- `dist/CodeX桌面端by.冰点零度-1.1.0-arm64.zip`
+- `dist/mac-arm64/CodeX桌面端by.冰点零度.app`
+
+## API 概览
+
+- `GET /api/health`
+- `POST /api/connect/test`
+- `GET /api/config`
+- `POST /api/config/workspace`
+- `GET /api/threads`
+- `GET /api/threads/:id`
+- `POST /api/threads`
+- `POST /api/threads/:id/message`
+- `POST /api/threads/:id/interrupt`
+- `DELETE /api/threads/:id`
+- `GET /api/approvals`
+- `POST /api/approvals/:id/respond`
+- `GET /ws`
+
+除 `GET /api/health` 外，其他接口均需：
+
+```http
+Authorization: Bearer <token>
+```
