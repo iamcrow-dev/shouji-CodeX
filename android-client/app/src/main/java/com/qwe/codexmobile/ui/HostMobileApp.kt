@@ -15,6 +15,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,6 +67,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -560,6 +562,16 @@ fun HostMobileApp() {
                     items = chatItems,
                     busy = isBusy,
                     onBack = ::navigateBackToThreads,
+                    onRefresh = {
+                        scope.launch {
+                            val thread = activeThread ?: return@launch
+                            runCatching {
+                                openThread(thread)
+                            }.onFailure { error ->
+                                snackbarHostState.showSnackbar(error.message ?: "刷新失败")
+                            }
+                        }
+                    },
                     onSend = { text, images, files ->
                         scope.launch {
                             val thread = activeThread ?: return@launch
@@ -797,9 +809,19 @@ private fun ThreadListScreen(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    "状态：${statusLabel(thread.status)} · ${formatThreadTimestamp(toEpochMillis(thread.updatedAt))}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF9A9A9A)
+                                    buildAnnotatedString {
+                                        withStyle(SpanStyle(color = Color(0xFF9A9A9A))) {
+                                            append("状态：")
+                                        }
+                                        withStyle(SpanStyle(color = threadStatusValueColor(thread.status))) {
+                                            append(statusLabel(thread.status))
+                                        }
+                                        withStyle(SpanStyle(color = Color(0xFF9A9A9A))) {
+                                            append(" · ")
+                                            append(formatThreadTimestamp(toEpochMillis(thread.updatedAt)))
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall
                                 )
                             }
                         }
@@ -854,6 +876,7 @@ private fun ChatScreen(
     items: List<ChatItem>,
     busy: Boolean,
     onBack: () -> Unit,
+    onRefresh: () -> Unit,
     onSend: (String, List<PendingImageAttachment>, List<PendingFileAttachment>) -> Unit,
     onInterrupt: () -> Unit,
     onResolveApproval: (ApprovalItem, String, Map<String, String>) -> Unit
@@ -863,6 +886,8 @@ private fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    var gestureEnabled by remember { mutableStateOf(false) }
+    var dragDistance by remember { mutableStateOf(0f) }
     var input by remember { mutableStateOf("") }
     var hasInitializedBottomScroll by remember(thread?.id) { mutableStateOf(false) }
     var listVisible by remember(thread?.id) { mutableStateOf(false) }
@@ -928,6 +953,39 @@ private fun ChatScreen(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .offset(y = (-2).dp)
+            .pointerInput(onBack) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset ->
+                        gestureEnabled = offset.x <= 56.dp.toPx()
+                        dragDistance = 0f
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        if (!gestureEnabled) {
+                            return@detectHorizontalDragGestures
+                        }
+
+                        if (dragAmount > 0f) {
+                            dragDistance += dragAmount
+                            change.consume()
+                        }
+
+                        if (dragDistance >= 96.dp.toPx()) {
+                            gestureEnabled = false
+                            dragDistance = 0f
+                            onBack()
+                        }
+                    },
+                    onDragEnd = {
+                        gestureEnabled = false
+                        dragDistance = 0f
+                    },
+                    onDragCancel = {
+                        gestureEnabled = false
+                        dragDistance = 0f
+                    }
+                )
+            }
             .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 0.dp),
         verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
@@ -936,14 +994,12 @@ private fun ChatScreen(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.offset(y = (-8).dp)
+            overflow = TextOverflow.Ellipsis
         )
 
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .offset(y = (-14).dp),
+                .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -957,19 +1013,19 @@ private fun ChatScreen(
                 },
                 style = MaterialTheme.typography.bodySmall
             )
-            TextButton(
-                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                enabled = !busy
-            ) {
-                Text("+")
-            }
+            TopActionLabel(
+                text = "+",
+                enabled = !busy,
+                onClick = { filePickerLauncher.launch(arrayOf("*/*")) }
+            )
             Spacer(modifier = Modifier.weight(1f))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onBack) { Text("返回") }
-                TextButton(onClick = onInterrupt, enabled = !busy) { Text("停止") }
+                TopActionLabel(text = "刷新", enabled = !busy, onClick = onRefresh)
+                TopActionLabel(text = "返回", onClick = onBack)
+                TopActionLabel(text = "停止", enabled = !busy, onClick = onInterrupt)
             }
         }
 
@@ -986,7 +1042,7 @@ private fun ChatScreen(
         Card(
             modifier = Modifier
                 .weight(1f)
-                .offset(y = (-18).dp)
+                .offset(y = 0.dp)
         ) {
             LazyColumn(
                 state = listState,
@@ -1001,7 +1057,7 @@ private fun ChatScreen(
                             }
                         )
                     }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 items(displayItems, key = { it.id }) { item ->
@@ -1016,7 +1072,7 @@ private fun ChatScreen(
         Column(
             modifier = Modifier
                 .navigationBarsPadding()
-                .offset(y = (-18).dp),
+                .offset(y = (-1).dp),
             verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             if (pendingImages.isNotEmpty()) {
@@ -1061,7 +1117,8 @@ private fun ChatScreen(
                     label = { Text("输入要发送给 CodeX 的内容") },
                     modifier = Modifier.weight(1f),
                     minLines = 2,
-                    maxLines = 4
+                    maxLines = 4,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp)
                 )
 
                 Column(
@@ -1199,6 +1256,8 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     var actionMenuVisible by remember(item.id) { mutableStateOf(false) }
     var selectionDialogVisible by remember(item.id) { mutableStateOf(false) }
     val bodyText = item.text.ifBlank { item.status.orEmpty() }
+    val timestampText = if (item.timestamp > 0L) formatMessageTimestamp(item.timestamp) else null
+    val timestampReservedPadding = if (timestampText != null) 46.dp else 0.dp
 
     Box(
         modifier = Modifier
@@ -1217,55 +1276,68 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
             if (bodyText.isNotBlank()) {
-                if (isAssistant) {
-                    AndroidView(
-                        factory = { viewContext ->
-                            TextView(viewContext).apply {
-                                textSize = 14f
-                                autoLinkMask = 0
-                                linksClickable = false
-                                isClickable = true
-                                isLongClickable = true
-                                setTextIsSelectable(false)
-                                movementMethod = null
-                            }
-                        },
-                        update = { textView ->
-                            textView.textSize = 14f
-                            textView.setTextColor(foreground.toArgb())
-                            textView.autoLinkMask = 0
-                            textView.linksClickable = false
-                            textView.movementMethod = null
-                            textView.setOnClickListener {
-                                onTap()
-                            }
-                            textView.setOnLongClickListener {
-                                actionMenuVisible = true
-                                true
-                            }
-                            markwon.setMarkdown(textView, bodyText)
-                            val hasHttpLinks = keepOnlyHttpLinks(textView)
-                            textView.linksClickable = hasHttpLinks
-                            textView.movementMethod = if (hasHttpLinks) {
-                                LinkMovementMethod.getInstance()
-                            } else {
-                                null
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    Text(
-                        bodyText,
-                        color = foreground,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp)
-                    )
+                Box {
+                    if (isAssistant) {
+                        AndroidView(
+                            factory = { viewContext ->
+                                TextView(viewContext).apply {
+                                    textSize = 14f
+                                    autoLinkMask = 0
+                                    linksClickable = false
+                                    isClickable = true
+                                    isLongClickable = true
+                                    setTextIsSelectable(false)
+                                    movementMethod = null
+                                }
+                            },
+                            update = { textView ->
+                                textView.textSize = 14f
+                                textView.setTextColor(foreground.toArgb())
+                                textView.autoLinkMask = 0
+                                textView.linksClickable = false
+                                textView.movementMethod = null
+                                textView.setOnClickListener {
+                                    onTap()
+                                }
+                                textView.setOnLongClickListener {
+                                    actionMenuVisible = true
+                                    true
+                                }
+                                markwon.setMarkdown(textView, bodyText)
+                                val hasHttpLinks = keepOnlyHttpLinks(textView)
+                                textView.linksClickable = hasHttpLinks
+                                textView.movementMethod = if (hasHttpLinks) {
+                                    LinkMovementMethod.getInstance()
+                                } else {
+                                    null
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = timestampReservedPadding)
+                        )
+                    } else {
+                        Text(
+                            bodyText,
+                            color = foreground,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+                            modifier = Modifier.padding(end = timestampReservedPadding)
+                        )
+                    }
+
+                    if (timestampText != null) {
+                        Text(
+                            timestampText,
+                            color = timestampColor,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                        )
+                    }
                 }
             }
-
-            if (item.timestamp > 0L) {
+            if (bodyText.isBlank() && timestampText != null) {
                 Text(
-                    formatMessageTimestamp(item.timestamp),
+                    timestampText,
                     color = timestampColor,
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
                     modifier = Modifier.align(Alignment.End)
@@ -1354,7 +1426,7 @@ private fun formatMessageTimestamp(timestamp: Long): String {
     if (timestamp <= 0L) {
         return "--"
     }
-    return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
 }
 
 private fun compactThreadPreview(value: String): String {
@@ -1463,4 +1535,29 @@ private fun statusLabel(status: String): String {
         "error" -> "错误"
         else -> status
     }
+}
+
+private fun threadStatusValueColor(status: String): Color {
+    return if (status == "running") {
+        Color(0xFF3B82F6)
+    } else {
+        Color(0xFF9A9A9A)
+    }
+}
+
+@Composable
+private fun TopActionLabel(
+    text: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
+        color = if (enabled) Color(0xFF0F766E) else Color(0xFFA8B1AD),
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
 }
