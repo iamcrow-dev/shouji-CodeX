@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>win&#26700;&#38754;CodeX</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <section class="hero-card">
+        <div>
+          <p class="eyebrow">&#26412;&#26426; Host &#26381;&#21153;</p>
+          <p class="hero-copy">
+            &#29992;&#19968;&#20010;&#26700;&#38754;&#31471;&#31649;&#29702;&#20320;&#30340;&#31227;&#21160;&#23545;&#35805;&#20837;&#21475;&#12290;&#26381;&#21153;&#30417;&#21548;&#24403;&#21069;&#37197;&#32622;&#31471;&#21475;&#65292;&#25163;&#26426;&#31471;&#36890;&#36807;&#21516;&#19968;&#22320;&#22336;&#21516;&#26102;&#20351;&#29992; HTTP &#21644; WebSocket&#12290;
+          </p>
+        </div>
+        <div class="status-badge" id="service-status-badge">&#26410;&#21551;&#21160;</div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>&#36830;&#25509;&#20449;&#24687;</h2>
+          <div class="field-list">
+            <div class="field">
+              <span class="label">&#26381;&#21153;&#22320;&#22336;</span>
+              <span class="value mono" id="primary-address">-</span>
+            </div>
+            <div class="field">
+              <span class="label">&#31471;&#21475;</span>
+              <span class="value mono" id="port-value">333</span>
+            </div>
+            <div class="field multiline">
+              <span class="label">&#35774;&#32622;&#31471;&#21475;</span>
+              <div class="value">
+                <input
+                  id="port-input"
+                  class="path-input mono"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  step="1"
+                  placeholder="333"
+                />
+              </div>
+            </div>
+            <div class="field multiline">
+              <span class="label">&#21487;&#29992;&#22320;&#22336;</span>
+              <span class="value" id="all-addresses">-</span>
+            </div>
+            <div class="field">
+              <span class="label">&#35775;&#38382;&#20196;&#29260;</span>
+              <span class="value mono" id="token-value">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</span>
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="save-port-button" class="secondary">&#20445;&#23384;&#31471;&#21475;</button>
+            <button id="copy-token-button">&#22797;&#21046;&#20196;&#29260;</button>
+            <button id="toggle-token-button">&#26174;&#31034;&#20196;&#29260;</button>
+          </div>
+          <p class="hint">
+            &#20445;&#23384;&#26032;&#31471;&#21475;&#21518;&#65292;&#22914;&#26524;&#26381;&#21153;&#27491;&#22312;&#36816;&#34892;&#65292;&#20250;&#33258;&#21160;&#37325;&#21551;&#21040;&#26032;&#31471;&#21475;&#12290;
+          </p>
+        </article>
+
+        <article class="panel">
+          <h2>&#26381;&#21153;&#25511;&#21046;</h2>
+          <div class="field-list">
+            <div class="field">
+              <span class="label">&#26381;&#21153;&#29366;&#24577;</span>
+              <span class="value" id="service-status-text">&#26410;&#21551;&#21160;</span>
+            </div>
+            <div class="field">
+              <span class="label">Codex &#29366;&#24577;</span>
+              <span class="value" id="codex-status">&#26816;&#26597;&#20013;</span>
+            </div>
+            <div class="field">
+              <span class="label">&#24050;&#36830;&#25509;&#35774;&#22791;</span>
+              <span class="value mono" id="client-count">0</span>
+            </div>
+            <div class="field">
+              <span class="label">&#24453;&#22788;&#29702;&#23457;&#25209;</span>
+              <span class="value mono" id="pending-approvals">0</span>
+            </div>
+            <div class="field multiline">
+              <span class="label">&#24037;&#20316;&#30446;&#24405;</span>
+              <span class="value path mono" id="workspace-path">-</span>
+            </div>
+            <div class="field multiline">
+              <span class="label">&#26368;&#36817;&#38169;&#35823;</span>
+              <span class="value" id="error-message">&#26080;</span>
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="start-button" class="primary">&#21551;&#21160;&#26381;&#21153;</button>
+            <button id="stop-button" class="danger">&#20572;&#27490;&#26381;&#21153;</button>
+            <button id="reset-token-button">&#37325;&#32622;&#20196;&#29260;</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Codex &#36335;&#24452;</h2>
+          <div class="field-list">
+            <div class="field multiline">
+              <span class="label">&#24403;&#21069;&#29983;&#25928;&#36335;&#24452;</span>
+              <span class="value path mono" id="codex-path-value">--</span>
+            </div>
+            <div class="field">
+              <span class="label">&#36335;&#24452;&#26469;&#28304;</span>
+              <span class="value" id="codex-path-source">&#33258;&#21160;&#25506;&#27979;</span>
+            </div>
+            <div class="field">
+              <span class="label">&#36335;&#24452;&#29366;&#24577;</span>
+              <span class="value" id="codex-path-status">&#26816;&#26597;&#20013;</span>
+            </div>
+            <div class="field multiline">
+              <span class="label">&#25163;&#21160;&#36335;&#24452;</span>
+              <div class="value">
+                <input
+                  id="codex-path-input"
+                  class="path-input mono"
+                  type="text"
+                  placeholder="&#30041;&#31354;&#34920;&#31034;&#33258;&#21160;&#25506;&#27979; codex.exe"
+                />
+              </div>
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="save-codex-path-button" class="secondary">&#20445;&#23384;&#36335;&#24452;</button>
+            <button id="browse-codex-path-button">&#27983;&#35272;...</button>
+            <button id="reset-codex-path-button">&#24674;&#22797;&#33258;&#21160;&#25506;&#27979;</button>
+          </div>
+          <p class="hint">
+            Windows &#20250;&#20248;&#20808;&#25506;&#27979; <span class="mono">%USERPROFILE%\.codex\.sandbox-bin\codex.exe</span>&#65292;&#20877;&#22238;&#36864;&#21040; PATH &#21644;&#20854;&#20182;&#24050;&#30693;&#36335;&#24452;&#12290;
+          </p>
+        </article>
+
+        <article class="panel toggles">
+          <h2>&#21551;&#21160;&#36873;&#39033;</h2>
+          <label class="toggle">
+            <span>&#24320;&#26426;&#33258;&#21160;&#21551;&#21160;</span>
+            <input type="checkbox" id="launch-at-login-toggle" />
+          </label>
+          <label class="toggle">
+            <span>&#21551;&#21160;&#21518;&#33258;&#21160;&#24320;&#21551;&#26381;&#21153;</span>
+            <input type="checkbox" id="auto-start-service-toggle" />
+          </label>
+          <label class="toggle">
+            <span>&#36339;&#36807;&#23457;&#25209;&#65288;&#39640;&#26435;&#38480;&#65289;</span>
+            <input type="checkbox" id="bypass-permissions-toggle" />
+          </label>
+          <p class="hint">
+            &#24320;&#21551;&#21518;&#23558;&#20351;&#29992; <span class="mono">approvalPolicy=never</span> &#19982;
+            <span class="mono">sandbox=danger-full-access</span>&#12290;&#36816;&#34892;&#20013;&#20999;&#25442;&#20250;&#33258;&#21160;&#37325;&#36830;&#24182;&#31435;&#21363;&#29983;&#25928;&#12290;<span class="inline-nowrap">&nbsp;by.&#20912;&#28857;&#38646;&#24230;</span>
+          </p>
+        </article>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
