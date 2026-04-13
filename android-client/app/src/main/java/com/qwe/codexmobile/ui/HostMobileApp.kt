@@ -15,7 +15,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -886,9 +886,8 @@ private fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    var gestureEnabled by remember { mutableStateOf(false) }
-    var dragDistance by remember { mutableStateOf(0f) }
     var input by remember { mutableStateOf("") }
+    var isInputFocused by remember { mutableStateOf(false) }
     var hasInitializedBottomScroll by remember(thread?.id) { mutableStateOf(false) }
     var listVisible by remember(thread?.id) { mutableStateOf(false) }
     val pendingImages = remember { mutableStateListOf<PendingImageAttachment>() }
@@ -930,6 +929,10 @@ private fun ChatScreen(
         keyboardController?.hide()
     }
 
+    BackHandler(enabled = isInputFocused) {
+        dismissKeyboard()
+    }
+
     LaunchedEffect(thread?.id, displayItems.size) {
         if (displayItems.isEmpty()) {
             listVisible = true
@@ -954,38 +957,6 @@ private fun ChatScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .offset(y = (-2).dp)
-            .pointerInput(onBack) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        gestureEnabled = offset.x <= 56.dp.toPx()
-                        dragDistance = 0f
-                    },
-                    onHorizontalDrag = { change, dragAmount ->
-                        if (!gestureEnabled) {
-                            return@detectHorizontalDragGestures
-                        }
-
-                        if (dragAmount > 0f) {
-                            dragDistance += dragAmount
-                            change.consume()
-                        }
-
-                        if (dragDistance >= 96.dp.toPx()) {
-                            gestureEnabled = false
-                            dragDistance = 0f
-                            onBack()
-                        }
-                    },
-                    onDragEnd = {
-                        gestureEnabled = false
-                        dragDistance = 0f
-                    },
-                    onDragCancel = {
-                        gestureEnabled = false
-                        dragDistance = 0f
-                    }
-                )
-            }
             .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 0.dp),
         verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
@@ -1115,7 +1086,9 @@ private fun ChatScreen(
                     value = input,
                     onValueChange = { input = it },
                     label = { Text("输入要发送给 CodeX 的内容") },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { isInputFocused = it.isFocused },
                     minLines = 2,
                     maxLines = 4,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp)
