@@ -1,6 +1,6 @@
 {
   "name": "codex-host-app",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "CodeX桌面端by.冰点零度",
   "author": "qwe",
@@ -40,8 +40,8 @@
       ],
       "icon": "assets/codex-icon.icns",
       "extendInfo": {
-        "CFBundleShortVersionString": "1.1",
-        "CFBundleVersion": "1.1"
+        "CFBundleShortVersionString": "1.2.0",
+        "CFBundleVersion": "1.2.0"
       }
     },
     "dmg": {}

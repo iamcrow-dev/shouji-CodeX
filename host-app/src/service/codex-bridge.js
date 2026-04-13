@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const CODEX_BINARY_PATH = "/Applications/Codex.app/Contents/Resources/codex";
 const MOBILE_UPLOAD_DIR = ".codex-mobile-uploads";
-const MAX_THREAD_ITEMS = 500;
+const MAX_THREAD_ITEMS = 400;
 
 function summarizeUserContent(contentItems = []) {
   const textLines = [];
@@ -370,7 +370,7 @@ export class CodexBridge extends EventEmitter {
     await this.request("initialize", {
       clientInfo: {
         name: "codex-desktop-by-bingdianlingdu",
-        version: "1.1"
+        version: "1.2.0"
       },
       capabilities: {
         experimentalApi: true
