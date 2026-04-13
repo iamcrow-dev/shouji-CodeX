@@ -4,6 +4,8 @@
 #### windows的桌面版也做好了，默认都是bypass permissions（绕过审批）模式
 #### 聊天页面对话超过200条，进入的时候加载时间会长一点是正常现象
 ![桌面端界面](https://github.com/iamcrow-dev/shouji-CodeX/blob/main/%E6%97%A0%E6%A0%87%E9%A2%98.png)
+![手机界面](https://github.com/iamcrow-dev/shouji-CodeX/blob/main/Screenshot_2026-03-20-13-51-59-957_com.qwe.codexmobile.png)
+![聊天页](https://github.com/iamcrow-dev/shouji-CodeX/blob/main/Screenshot_2026-03-20-17-41-43-442_com.qwe.codexmobile.png)
 # CodeX 安卓手机 + 桌面端（安装与构建）
 
 这个目录包含两部分：
