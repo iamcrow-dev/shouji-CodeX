@@ -40,6 +40,18 @@ function normalizeWorkspaceInput(workspacePath) {
   return String(workspacePath || "").trim().replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
+function resolveSiblingWorkspacePath(basePath, siblingName) {
+  const normalizedBasePath = String(basePath || "").trim();
+  if (!normalizedBasePath) {
+    return "";
+  }
+
+  const baseName = path.basename(normalizedBasePath).toLowerCase();
+  const parentDir = baseName === "documents" ? normalizedBasePath : path.dirname(normalizedBasePath);
+  const candidatePath = path.join(parentDir, siblingName);
+  return existsSync(candidatePath) ? candidatePath : "";
+}
+
 export class HostService extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -190,10 +202,9 @@ export class HostService extends EventEmitter {
     let resolvedPath = normalizedPath;
 
     if (normalizedInput === "/Users/qwe/Documents/AI" || normalizedInput === "/Users/qwe/Documents/ai") {
-      const aiFallbackPath = fallbackPath ? path.join(path.dirname(fallbackPath), "ai") : "";
-      resolvedPath = aiFallbackPath && existsSync(aiFallbackPath) ? aiFallbackPath : fallbackPath;
+      resolvedPath = resolveSiblingWorkspacePath(fallbackPath, "ai") || fallbackPath;
     } else if (isLegacyPlaceholderWorkspacePath(normalizedPath)) {
-      resolvedPath = fallbackPath;
+      resolvedPath = resolveSiblingWorkspacePath(fallbackPath, "codex") || fallbackPath;
     }
 
     if ((!resolvedPath || !existsSync(resolvedPath)) && fallbackPath) {
