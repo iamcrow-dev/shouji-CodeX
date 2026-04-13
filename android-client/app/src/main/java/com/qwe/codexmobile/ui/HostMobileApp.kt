@@ -1220,7 +1220,6 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     val isAssistant = item.role == "assistant"
     val background = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
     val foreground = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    val timestampColor = if (isUser) Color(0xFFD8D8D8) else Color(0xFF9A9A9A)
     val markwon = remember(context) {
         Markwon.builder(context)
             .usePlugin(TablePlugin.create(context))
@@ -1229,8 +1228,6 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     var actionMenuVisible by remember(item.id) { mutableStateOf(false) }
     var selectionDialogVisible by remember(item.id) { mutableStateOf(false) }
     val bodyText = item.text.ifBlank { item.status.orEmpty() }
-    val timestampText = if (item.timestamp > 0L) formatMessageTimestamp(item.timestamp) else null
-    val timestampReservedPadding = if (timestampText != null) 46.dp else 0.dp
 
     Box(
         modifier = Modifier
@@ -1285,36 +1282,16 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                                     null
                                 }
                             },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(end = timestampReservedPadding)
+                            modifier = Modifier.fillMaxWidth()
                         )
                     } else {
                         Text(
                             bodyText,
                             color = foreground,
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
-                            modifier = Modifier.padding(end = timestampReservedPadding)
-                        )
-                    }
-
-                    if (timestampText != null) {
-                        Text(
-                            timestampText,
-                            color = timestampColor,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                            modifier = Modifier.align(Alignment.BottomEnd)
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp)
                         )
                     }
                 }
-            }
-            if (bodyText.isBlank() && timestampText != null) {
-                Text(
-                    timestampText,
-                    color = timestampColor,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                    modifier = Modifier.align(Alignment.End)
-                )
             }
         }
 
@@ -1393,13 +1370,6 @@ private fun approvalKindLabel(kind: String): String {
         "user_input" -> "等待输入"
         else -> "审批"
     }
-}
-
-private fun formatMessageTimestamp(timestamp: Long): String {
-    if (timestamp <= 0L) {
-        return "--"
-    }
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
 }
 
 private fun compactThreadPreview(value: String): String {
