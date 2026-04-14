@@ -270,23 +270,42 @@ class HostApiClient {
     }
 
     private fun httpBase(config: ConnectionConfig): String {
-        val host = normalizeHost(config.host)
-        return "http://$host:${config.port.trim()}"
+        val target = parseTarget(config)
+        return "${if (target.secure) "https" else "http"}://${target.host}:${target.port}"
     }
 
     private fun wsBase(config: ConnectionConfig): String {
-        val host = normalizeHost(config.host)
-        return "ws://$host:${config.port.trim()}"
+        val target = parseTarget(config)
+        return "${if (target.secure) "wss" else "ws"}://${target.host}:${target.port}"
     }
 
-    private fun normalizeHost(raw: String): String {
-        return raw.trim()
+    private fun parseTarget(config: ConnectionConfig): RequestTarget {
+        val rawHost = config.host.trim()
+        val port = config.port.trim()
+        val secure =
+            rawHost.startsWith("https://", ignoreCase = true) ||
+                rawHost.startsWith("wss://", ignoreCase = true) ||
+                port == "443"
+
+        val host = rawHost
             .removePrefix("http://")
             .removePrefix("https://")
             .removePrefix("ws://")
             .removePrefix("wss://")
             .trimEnd('/')
+
+        return RequestTarget(
+            host = host,
+            port = port,
+            secure = secure
+        )
     }
+
+    private data class RequestTarget(
+        val host: String,
+        val port: String,
+        val secure: Boolean
+    )
 
     private fun parseThreadSummary(json: JSONObject): ThreadSummary {
         return ThreadSummary(
