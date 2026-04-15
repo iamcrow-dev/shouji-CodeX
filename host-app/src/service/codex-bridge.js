@@ -711,6 +711,21 @@ export class CodexBridge extends EventEmitter {
     };
   }
 
+  async archiveThread(threadId) {
+    await this.withRecoveredThread(threadId, async () => {
+      return this.request("thread/archive", {
+        threadId
+      });
+    });
+
+    this.activeTurns.delete(threadId);
+    this.loadedThreads.delete(threadId);
+
+    return {
+      threadId
+    };
+  }
+
   listPendingApprovals() {
     return Array.from(this.pendingApprovals.values());
   }

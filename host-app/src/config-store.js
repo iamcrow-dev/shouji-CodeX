@@ -17,8 +17,7 @@ export class ConfigStore {
       launchAtLogin: false,
       autoStartService: false,
       bypassPermissions: true,
-      autoApprove: true,
-      deletedThreadIds: []
+      autoApprove: true
     };
   }
 
@@ -42,10 +41,8 @@ export class ConfigStore {
         merged.token = generateToken(20);
       }
 
-      if (!Array.isArray(merged.deletedThreadIds)) {
-        merged.deletedThreadIds = [];
-      } else {
-        merged.deletedThreadIds = merged.deletedThreadIds.filter((value) => typeof value === "string" && value);
+      if (Object.prototype.hasOwnProperty.call(merged, "deletedThreadIds")) {
+        delete merged.deletedThreadIds;
       }
 
       merged.autoApprove = Boolean(merged.autoApprove);

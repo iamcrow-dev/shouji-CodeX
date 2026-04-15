@@ -155,10 +155,6 @@ async function bootstrap() {
   hostService = new HostService({
     bypassPermissions: configStore.get().bypassPermissions,
     autoApprove: configStore.get().autoApprove,
-    deletedThreadIds: configStore.get().deletedThreadIds,
-    onDeletedThreadIdsChange: (deletedThreadIds) => {
-      configStore.update({ deletedThreadIds });
-    },
     onWorkspacePathChange: (workspacePath) => {
       configStore.update({ workspacePath });
     }

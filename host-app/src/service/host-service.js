@@ -40,11 +40,6 @@ export class HostService extends EventEmitter {
     this.port = 333;
     this.workspacePath = "";
     this.bypassPermissions = options.bypassPermissions !== false;
-    this.deletedThreadIds = new Set(
-      Array.isArray(options.deletedThreadIds) ? options.deletedThreadIds.filter((value) => typeof value === "string" && value) : []
-    );
-    this.onDeletedThreadIdsChange =
-      typeof options.onDeletedThreadIdsChange === "function" ? options.onDeletedThreadIdsChange : () => {};
     this.onWorkspacePathChange =
       typeof options.onWorkspacePathChange === "function" ? options.onWorkspacePathChange : () => {};
     this.state = {
@@ -155,14 +150,6 @@ export class HostService extends EventEmitter {
     return headerToken === this.token || queryToken === this.token;
   }
 
-  isThreadDeleted(threadId) {
-    return this.deletedThreadIds.has(String(threadId));
-  }
-
-  persistDeletedThreadIds() {
-    this.onDeletedThreadIdsChange([...this.deletedThreadIds]);
-  }
-
   async updateWorkspacePath(workspacePath) {
     const normalizedPath = String(workspacePath || "").trim();
     if (!normalizedPath) {
@@ -193,10 +180,6 @@ export class HostService extends EventEmitter {
 
     this.emitState({});
     return this.workspacePath;
-  }
-
-  filterDeletedThreads(threads = []) {
-    return threads.filter((thread) => !this.isThreadDeleted(thread.id));
   }
 
   async updateBypassPermissions(enabled) {
@@ -299,7 +282,7 @@ export class HostService extends EventEmitter {
         .then((threads) => {
           response.json({
             ok: true,
-            threads: this.filterDeletedThreads(threads)
+            threads
           });
         })
         .catch((error) => {
@@ -311,14 +294,6 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.get("/api/threads/:id", (request, response) => {
-      if (this.isThreadDeleted(request.params.id)) {
-        response.status(404).json({
-          ok: false,
-          message: "会话不存在"
-        });
-        return;
-      }
-
       this.codexBridge
         .readThread(request.params.id)
         .then((thread) => {
@@ -356,14 +331,6 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.post("/api/threads/:id/message", (request, response) => {
-      if (this.isThreadDeleted(request.params.id)) {
-        response.status(404).json({
-          ok: false,
-          message: "会话不存在"
-        });
-        return;
-      }
-
       const text = typeof request.body?.text === "string" ? request.body.text : "";
       const images = Array.isArray(request.body?.images)
         ? request.body.images.filter((value) => typeof value === "string" && value.length > 0)
@@ -409,14 +376,6 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.post("/api/threads/:id/interrupt", (request, response) => {
-      if (this.isThreadDeleted(request.params.id)) {
-        response.status(404).json({
-          ok: false,
-          message: "会话不存在"
-        });
-        return;
-      }
-
       this.codexBridge
         .interruptThread(request.params.id)
         .then((result) => {
@@ -435,19 +394,27 @@ export class HostService extends EventEmitter {
 
     this.httpApp.delete("/api/threads/:id", (request, response) => {
       const threadId = String(request.params.id);
-      this.deletedThreadIds.add(threadId);
-      this.persistDeletedThreadIds();
-      this.broadcast("thread.deleted", { threadId });
-      response.json({
-        ok: true,
-        threadId
-      });
+      this.codexBridge
+        .archiveThread(threadId)
+        .then(() => {
+          this.broadcast("thread.deleted", { threadId });
+          response.json({
+            ok: true,
+            threadId
+          });
+        })
+        .catch((error) => {
+          response.status(500).json({
+            ok: false,
+            message: error.message
+          });
+        });
     });
 
     this.httpApp.get("/api/approvals", (_request, response) => {
       response.json({
         ok: true,
-        approvals: this.codexBridge.listPendingApprovals().filter((approval) => !approval.threadId || !this.isThreadDeleted(approval.threadId))
+        approvals: this.codexBridge.listPendingApprovals()
       });
     });
 
