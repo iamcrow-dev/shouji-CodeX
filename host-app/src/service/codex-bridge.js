@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 const CODEX_BINARY_PATH = "/Applications/Codex.app/Contents/Resources/codex";
 const MOBILE_UPLOAD_DIR = ".codex-mobile-uploads";
-const MAX_THREAD_ITEMS = 400;
+const MAX_THREAD_ITEMS = 330;
 
 function summarizeUserContent(contentItems = []) {
   const textLines = [];
@@ -718,8 +718,25 @@ export class CodexBridge extends EventEmitter {
       });
     });
 
+    this.clearThreadState(threadId);
+
+    return {
+      threadId
+    };
+  }
+
+  clearThreadState(threadId) {
     this.activeTurns.delete(threadId);
     this.loadedThreads.delete(threadId);
+    this.threadSummaryCache.delete(threadId);
+
+    for (const [requestId, approval] of this.pendingApprovals.entries()) {
+      if (approval.threadId === threadId) {
+        this.pendingApprovals.delete(requestId);
+      }
+    }
+
+    this.emit("state-changed", this.getState());
 
     return {
       threadId

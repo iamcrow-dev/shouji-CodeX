@@ -4,6 +4,17 @@ import { existsSync, statSync } from "node:fs";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexBridge } from "./codex-bridge.js";
+import { inspectThreadArtifacts, purgeThreadArtifacts } from "./thread-storage.js";
+
+const PURGE_RETRY_ATTEMPTS = 12;
+const PURGE_RETRY_DELAY_MS = 250;
+const PURGE_SETTLE_DELAY_MS = 400;
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function jsonMessage(type, payload = {}) {
   return JSON.stringify({
@@ -40,6 +51,7 @@ export class HostService extends EventEmitter {
     this.port = 333;
     this.workspacePath = "";
     this.bypassPermissions = options.bypassPermissions !== false;
+    this.hardDeletedThreadIds = new Set();
     this.onWorkspacePathChange =
       typeof options.onWorkspacePathChange === "function" ? options.onWorkspacePathChange : () => {};
     this.state = {
@@ -73,6 +85,10 @@ export class HostService extends EventEmitter {
     });
 
     this.codexBridge.on("thread-status", ({ threadId, status, rawStatus }) => {
+      if (this.isThreadHardDeleted(threadId)) {
+        return;
+      }
+
       this.broadcast("thread.updated", {
         threadId,
         status,
@@ -81,30 +97,58 @@ export class HostService extends EventEmitter {
     });
 
     this.codexBridge.on("turn-started", (payload) => {
+      if (this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("turn.started", payload);
     });
 
     this.codexBridge.on("turn-completed", (payload) => {
+      if (this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("turn.completed", payload);
     });
 
     this.codexBridge.on("message-delta", (payload) => {
+      if (this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("message.delta", payload);
     });
 
     this.codexBridge.on("message-completed", (payload) => {
+      if (this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("message.completed", payload);
     });
 
     this.codexBridge.on("approval-required", (approval) => {
+      if (approval.threadId && this.isThreadHardDeleted(approval.threadId)) {
+        return;
+      }
+
       this.broadcast("approval.required", approval);
     });
 
     this.codexBridge.on("approval-resolved", (payload) => {
+      if (payload.threadId && this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("approval.resolved", payload);
     });
 
     this.codexBridge.on("turn-error", (payload) => {
+      if (payload.threadId && this.isThreadHardDeleted(payload.threadId)) {
+        return;
+      }
+
       this.broadcast("thread.error", payload);
     });
   }
@@ -148,6 +192,66 @@ export class HostService extends EventEmitter {
     const headerToken = getBearerToken(request.headers.authorization);
     const queryToken = new URL(request.url, "http://localhost").searchParams.get("token") || "";
     return headerToken === this.token || queryToken === this.token;
+  }
+
+  isThreadHardDeleted(threadId) {
+    return this.hardDeletedThreadIds.has(String(threadId));
+  }
+
+  markThreadHardDeleted(threadId) {
+    this.hardDeletedThreadIds.add(String(threadId));
+  }
+
+  filterHardDeletedThreads(threads = []) {
+    return threads.filter((thread) => !this.isThreadHardDeleted(thread.id));
+  }
+
+  sendThreadNotFound(response) {
+    response.status(404).json({
+      ok: false,
+      message: "会话不存在"
+    });
+  }
+
+  summarizeRemainingArtifacts(inspection) {
+    const names = [
+      ...inspection.archivedFiles.map((value) => value.split("/").pop()),
+      ...inspection.sessionFiles.map((value) => value.split("/").pop()),
+      ...inspection.shellSnapshots.map((value) => value.split("/").pop())
+    ];
+
+    if (inspection.sessionIndexEntries > 0) {
+      names.push(`session_index.jsonl x${inspection.sessionIndexEntries}`);
+    }
+
+    return names.slice(0, 6).join("、");
+  }
+
+  async purgeThreadArtifactsWithRetries(threadId) {
+    let lastPurgeResult = null;
+    let lastInspection = null;
+
+    for (let attempt = 0; attempt < PURGE_RETRY_ATTEMPTS; attempt += 1) {
+      lastPurgeResult = await purgeThreadArtifacts(threadId);
+
+      await delay(PURGE_RETRY_DELAY_MS);
+      lastInspection = await inspectThreadArtifacts(threadId);
+
+      if (lastInspection.totalMatches === 0) {
+        await delay(PURGE_SETTLE_DELAY_MS);
+        lastInspection = await inspectThreadArtifacts(threadId);
+
+        if (lastInspection.totalMatches === 0) {
+          return {
+            ...lastPurgeResult,
+            attempts: attempt + 1
+          };
+        }
+      }
+    }
+
+    const remainingSummary = lastInspection ? this.summarizeRemainingArtifacts(lastInspection) : "";
+    throw new Error(remainingSummary || "仍有归档文件残留");
   }
 
   async updateWorkspacePath(workspacePath) {
@@ -282,7 +386,7 @@ export class HostService extends EventEmitter {
         .then((threads) => {
           response.json({
             ok: true,
-            threads
+            threads: this.filterHardDeletedThreads(threads)
           });
         })
         .catch((error) => {
@@ -294,6 +398,11 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.get("/api/threads/:id", (request, response) => {
+      if (this.isThreadHardDeleted(request.params.id)) {
+        this.sendThreadNotFound(response);
+        return;
+      }
+
       this.codexBridge
         .readThread(request.params.id)
         .then((thread) => {
@@ -331,6 +440,11 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.post("/api/threads/:id/message", (request, response) => {
+      if (this.isThreadHardDeleted(request.params.id)) {
+        this.sendThreadNotFound(response);
+        return;
+      }
+
       const text = typeof request.body?.text === "string" ? request.body.text : "";
       const images = Array.isArray(request.body?.images)
         ? request.body.images.filter((value) => typeof value === "string" && value.length > 0)
@@ -376,6 +490,11 @@ export class HostService extends EventEmitter {
     });
 
     this.httpApp.post("/api/threads/:id/interrupt", (request, response) => {
+      if (this.isThreadHardDeleted(request.params.id)) {
+        this.sendThreadNotFound(response);
+        return;
+      }
+
       this.codexBridge
         .interruptThread(request.params.id)
         .then((result) => {
@@ -392,29 +511,50 @@ export class HostService extends EventEmitter {
         });
     });
 
-    this.httpApp.delete("/api/threads/:id", (request, response) => {
+    this.httpApp.delete("/api/threads/:id", async (request, response) => {
       const threadId = String(request.params.id);
-      this.codexBridge
-        .archiveThread(threadId)
-        .then(() => {
-          this.broadcast("thread.deleted", { threadId });
-          response.json({
-            ok: true,
-            threadId
-          });
-        })
-        .catch((error) => {
-          response.status(500).json({
-            ok: false,
-            message: error.message
-          });
+
+      if (this.isThreadHardDeleted(threadId)) {
+        response.json({
+          ok: true,
+          threadId
         });
+        return;
+      }
+
+      try {
+        await this.codexBridge.archiveThread(threadId);
+      } catch (error) {
+        response.status(500).json({
+          ok: false,
+          message: error.message
+        });
+        return;
+      }
+
+      try {
+        const purgeResult = await this.purgeThreadArtifactsWithRetries(threadId);
+        this.markThreadHardDeleted(threadId);
+        this.broadcast("thread.deleted", { threadId });
+        response.json({
+          ok: true,
+          threadId,
+          purge: purgeResult
+        });
+      } catch (error) {
+        response.status(500).json({
+          ok: false,
+          message: `已归档，但彻底删除未完成：${error.message}`
+        });
+      }
     });
 
     this.httpApp.get("/api/approvals", (_request, response) => {
       response.json({
         ok: true,
-        approvals: this.codexBridge.listPendingApprovals()
+        approvals: this.codexBridge
+          .listPendingApprovals()
+          .filter((approval) => !approval.threadId || !this.isThreadHardDeleted(approval.threadId))
       });
     });
 
