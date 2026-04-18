@@ -72,6 +72,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
@@ -79,6 +80,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -1017,9 +1020,10 @@ private fun ChatScreen(
             }
         }
 
-        Card(
+        Box(
             modifier = Modifier
                 .weight(1f)
+                .fillMaxWidth()
                 .offset(y = 0.dp)
         ) {
             LazyColumn(
@@ -1035,7 +1039,7 @@ private fun ChatScreen(
                             }
                         )
                     }
-                    .padding(horizontal = 8.dp, vertical = 0.dp),
+                    .padding(horizontal = 3.dp, vertical = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 items(displayItems, key = { it.id }) { item ->
@@ -1225,7 +1229,7 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     val context = LocalContext.current
     val isUser = item.role == "user"
     val isAssistant = item.role == "assistant"
-    val background = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
+    val background = if (isUser) MaterialTheme.colorScheme.primary else Color(0xFFFEFCF7)
     val foreground = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     val markwon = remember(context) {
         Markwon.builder(context)
@@ -1242,6 +1246,15 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     ) {
         Column(
             modifier = Modifier
+                .then(
+                    if (isAssistant) {
+                        Modifier
+                            .fillMaxWidth()
+                            .expandBubbleWidth(startExtra = 4.dp, endExtra = 1.dp)
+                    } else {
+                        Modifier
+                    }
+                )
                 .align(if (isUser) Alignment.CenterEnd else Alignment.CenterStart)
                 .combinedClickable(
                     onClick = onTap,
@@ -1350,6 +1363,22 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                 }
             }
         )
+    }
+}
+
+private fun Modifier.expandBubbleWidth(startExtra: Dp, endExtra: Dp): Modifier = layout { measurable, constraints ->
+    val startPx = startExtra.roundToPx()
+    val endPx = endExtra.roundToPx()
+    val expandedConstraints = Constraints(
+        minWidth = constraints.minWidth + startPx + endPx,
+        maxWidth = constraints.maxWidth + startPx + endPx,
+        minHeight = constraints.minHeight,
+        maxHeight = constraints.maxHeight
+    )
+    val placeable = measurable.measure(expandedConstraints)
+
+    layout(constraints.maxWidth, placeable.height) {
+        placeable.placeRelative(-startPx, 0)
     }
 }
 
