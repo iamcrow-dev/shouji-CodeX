@@ -102,6 +102,7 @@ import com.qwe.codexmobile.model.ThreadSummary
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -140,13 +141,28 @@ fun HostMobileApp() {
     var screen by remember { mutableStateOf(Screen.Connection) }
     var config by remember { mutableStateOf(ConnectionConfig()) }
     var isBusy by remember { mutableStateOf(false) }
+    var isChatLoading by remember { mutableStateOf(false) }
     var activeThread by remember { mutableStateOf<ThreadSummary?>(null) }
     var hostStats by remember { mutableStateOf(HostStats()) }
     val threads = remember { mutableStateListOf<ThreadSummary>() }
     val chatItems = remember { mutableStateListOf<ChatItem>() }
+    val threadItemCache = remember { mutableStateMapOf<String, List<ChatItem>>() }
     val approvals = remember { mutableStateListOf<ApprovalItem>() }
     val latestScreen by rememberUpdatedState(screen)
     val latestConfig by rememberUpdatedState(config)
+    var socketReconnectAttempt by remember { mutableStateOf(0) }
+    var socketReconnectJob by remember { mutableStateOf<Job?>(null) }
+    var socketHasEverOpened by remember { mutableStateOf(false) }
+    var chatLoadGeneration by remember { mutableStateOf(0L) }
+
+    fun shouldMaintainSocket(): Boolean {
+        return config.isComplete() && screen != Screen.Connection
+    }
+
+    fun cancelSocketReconnect() {
+        socketReconnectJob?.cancel()
+        socketReconnectJob = null
+    }
 
     fun sortThreadsByUpdatedAt() {
         val sortedThreads = threads.sortedByDescending { it.updatedAt }
@@ -182,10 +198,19 @@ fun HostMobileApp() {
         }
     }
 
+    fun replaceVisibleChatItems(threadId: String, items: List<ChatItem>) {
+        threadItemCache[threadId] = items
+        if (activeThread?.id == threadId) {
+            chatItems.clear()
+            chatItems.addAll(items)
+        }
+    }
+
     suspend fun refreshListsAndStats() {
-        val latestThreads = apiClient.listThreads(config)
-        val latestApprovals = apiClient.listApprovals(config)
-        val latestStats = apiClient.getStats(config)
+        val bootstrap = apiClient.getBootstrap(config)
+        val latestThreads = bootstrap.threads
+        val latestApprovals = bootstrap.approvals
+        val latestStats = bootstrap.stats
         val currentThread = activeThread
         val mergedThreads = latestThreads.toMutableList()
         var nextActiveThread = currentThread?.let { current ->
@@ -209,6 +234,7 @@ fun HostMobileApp() {
         }
         if (screen == Screen.Chat && activeThread == null) {
             chatItems.clear()
+            isChatLoading = false
             screen = Screen.Threads
         }
     }
@@ -226,9 +252,77 @@ fun HostMobileApp() {
         refreshListsAndStats()
     }
 
-    fun connectSocketBridge() {
+    suspend fun resyncAfterSocketReconnect(showSuccessMessage: Boolean) {
+        refreshListsAndStats()
+
+        val currentThreadId = activeThread?.id
+        if (screen == Screen.Chat && currentThreadId != null) {
+            val items = apiClient.getThreadItems(config, currentThreadId)
+            activeThread = threads.firstOrNull { it.id == currentThreadId } ?: activeThread
+            replaceVisibleChatItems(currentThreadId, items)
+        }
+
+        if (showSuccessMessage) {
+            snackbarHostState.showSnackbar("已重新连接")
+        }
+    }
+
+    var connectSocketBridge: () -> Unit = {}
+
+    fun scheduleSocketReconnect(reason: String) {
+        if (!shouldMaintainSocket()) {
+            return
+        }
+
+        if (socketReconnectJob?.isActive == true) {
+            return
+        }
+
+        val attempt = socketReconnectAttempt
+        val delayMs = when (attempt) {
+            0 -> 1_000L
+            1 -> 2_000L
+            2 -> 5_000L
+            3 -> 10_000L
+            else -> 15_000L
+        }
+        socketReconnectAttempt = attempt + 1
+
+        socketReconnectJob = scope.launch {
+            if (attempt == 0 && reason.isNotBlank()) {
+                snackbarHostState.showSnackbar(reason)
+            }
+
+            delay(delayMs)
+
+            if (!shouldMaintainSocket()) {
+                return@launch
+            }
+
+            connectSocketBridge()
+        }
+    }
+
+    connectSocketBridge = {
         apiClient.connectSocket(
             config = config,
+            onOpened = {
+                val wasReconnect = socketHasEverOpened && socketReconnectAttempt > 0
+                cancelSocketReconnect()
+                socketReconnectAttempt = 0
+
+                if (wasReconnect) {
+                    scope.launch {
+                        runCatching {
+                            resyncAfterSocketReconnect(showSuccessMessage = true)
+                        }.onFailure { error ->
+                            snackbarHostState.showSnackbar(error.message ?: "重新连接后同步失败")
+                        }
+                    }
+                }
+
+                socketHasEverOpened = true
+            },
             onEvent = { event ->
                 when (event) {
                     is HostEvent.ThreadCreated -> {
@@ -245,8 +339,11 @@ fun HostMobileApp() {
                         if (activeThread?.id == event.threadId) {
                             activeThread = null
                             chatItems.clear()
+                            threadItemCache.remove(event.threadId)
+                            isChatLoading = false
                             screen = Screen.Threads
                         }
+                        threadItemCache.remove(event.threadId)
                     }
 
                     is HostEvent.TurnStarted -> {
@@ -277,6 +374,7 @@ fun HostMobileApp() {
                                     )
                                 )
                             }
+                            threadItemCache[event.threadId] = chatItems.toList()
                         }
                     }
 
@@ -306,6 +404,7 @@ fun HostMobileApp() {
                                     )
                                 )
                             }
+                            threadItemCache[event.threadId] = chatItems.toList()
                         }
                     }
 
@@ -339,9 +438,7 @@ fun HostMobileApp() {
                 }
             },
             onClosed = { reason ->
-                scope.launch {
-                    snackbarHostState.showSnackbar(reason)
-                }
+                scheduleSocketReconnect(reason)
             }
         )
     }
@@ -371,6 +468,14 @@ fun HostMobileApp() {
     }
 
     LaunchedEffect(screen, config.host, config.port, config.token) {
+        if (!config.isComplete() || screen == Screen.Connection) {
+            cancelSocketReconnect()
+            apiClient.closeSocket()
+            socketReconnectAttempt = 0
+            socketHasEverOpened = false
+            return@LaunchedEffect
+        }
+
         if (!config.isComplete() || screen != Screen.Threads) {
             return@LaunchedEffect
         }
@@ -384,17 +489,34 @@ fun HostMobileApp() {
     }
 
     suspend fun openThread(thread: ThreadSummary) {
-        isBusy = true
+        val cachedItems = threadItemCache[thread.id]
+        val loadGeneration = chatLoadGeneration + 1
+        chatLoadGeneration = loadGeneration
+        activeThread = thread
+        screen = Screen.Chat
+        if (cachedItems != null) {
+            chatItems.clear()
+            chatItems.addAll(cachedItems)
+        } else {
+            chatItems.clear()
+        }
+        isChatLoading = true
         runCatching {
             val items = apiClient.getThreadItems(config, thread.id)
-            activeThread = thread
-            chatItems.clear()
-            chatItems.addAll(items)
-            screen = Screen.Chat
+            threadItemCache[thread.id] = items
+            if (activeThread?.id == thread.id && chatLoadGeneration == loadGeneration) {
+                activeThread = threads.firstOrNull { it.id == thread.id } ?: thread
+                chatItems.clear()
+                chatItems.addAll(items)
+            }
         }.onFailure { error ->
-            snackbarHostState.showSnackbar(error.message ?: "读取会话失败")
+            if (activeThread?.id == thread.id && chatLoadGeneration == loadGeneration) {
+                snackbarHostState.showSnackbar(error.message ?: "读取会话失败")
+            }
         }
-        isBusy = false
+        if (activeThread?.id == thread.id && chatLoadGeneration == loadGeneration) {
+            isChatLoading = false
+        }
     }
 
     suspend fun reconnectAndRefresh(
@@ -402,7 +524,7 @@ fun HostMobileApp() {
         showSuccessMessage: Boolean = false
     ) {
         apiClient.testConnection(config)
-        hostStats = apiClient.getStats(config)
+        refreshListsAndStats()
         connectSocketBridge()
 
         if (showSuccessMessage) {
@@ -438,6 +560,7 @@ fun HostMobileApp() {
 
     DisposableEffect(Unit) {
         onDispose {
+            cancelSocketReconnect()
             apiClient.closeSocket()
         }
     }
@@ -511,6 +634,8 @@ fun HostMobileApp() {
                                 threads.add(0, thread)
                                 activeThread = thread
                                 chatItems.clear()
+                                threadItemCache[thread.id] = emptyList()
+                                isChatLoading = false
                                 screen = Screen.Chat
                             }.onFailure { error ->
                                 snackbarHostState.showSnackbar(error.message ?: "新建会话失败")
@@ -530,9 +655,11 @@ fun HostMobileApp() {
                                 apiClient.deleteThread(config, thread.id)
                                 threads.removeAll { it.id == thread.id }
                                 approvals.removeAll { it.threadId == thread.id }
+                                threadItemCache.remove(thread.id)
                                 if (activeThread?.id == thread.id) {
                                     activeThread = null
                                     chatItems.clear()
+                                    isChatLoading = false
                                     screen = Screen.Threads
                                 }
                             }.onFailure { error ->
@@ -557,6 +684,7 @@ fun HostMobileApp() {
                     approvals = approvals.filter { it.threadId == null || it.threadId == activeThread?.id },
                     items = chatItems,
                     busy = isBusy,
+                    loadingContent = isChatLoading,
                     onBack = ::navigateBackToThreads,
                     onRefresh = {
                         scope.launch {
@@ -598,6 +726,7 @@ fun HostMobileApp() {
                                     timestamp = System.currentTimeMillis()
                                 )
                             )
+                            threadItemCache[thread.id] = chatItems.toList()
                             updateThreadStatus(thread.id, "running")
                             runCatching {
                                 apiClient.sendMessage(
@@ -885,6 +1014,7 @@ private fun ChatScreen(
     approvals: List<ApprovalItem>,
     items: List<ChatItem>,
     busy: Boolean,
+    loadingContent: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSend: (String, List<PendingImageAttachment>, List<PendingFileAttachment>) -> Unit,
@@ -1004,7 +1134,7 @@ private fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TopActionLabel(text = "刷新", enabled = !busy, onClick = onRefresh)
+                TopActionLabel(text = "刷新", enabled = !busy && !loadingContent, onClick = onRefresh)
                 TopActionLabel(text = "返回", onClick = onBack)
                 TopActionLabel(text = "停止", enabled = !busy, onClick = onInterrupt)
             }
@@ -1048,6 +1178,26 @@ private fun ChatScreen(
                         onTap = dismissKeyboard
                     )
                 }
+            }
+
+            if (loadingContent && items.isEmpty()) {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text("正在加载会话内容…", style = MaterialTheme.typography.bodyMedium)
+                }
+            } else if (loadingContent) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .width(18.dp)
+                        .height(18.dp),
+                    strokeWidth = 2.dp
+                )
             }
         }
 
@@ -1111,7 +1261,7 @@ private fun ChatScreen(
                 ) {
                     TextButton(
                         onClick = { imagePickerLauncher.launch("image/*") },
-                        enabled = !busy
+                        enabled = !busy && !loadingContent
                     ) {
                         Text("图片")
                     }
@@ -1126,7 +1276,7 @@ private fun ChatScreen(
                                 pendingFiles.clear()
                             }
                         },
-                        enabled = !busy && (input.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty())
+                        enabled = !busy && !loadingContent && (input.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty())
                     ) {
                         Text("发送")
                     }

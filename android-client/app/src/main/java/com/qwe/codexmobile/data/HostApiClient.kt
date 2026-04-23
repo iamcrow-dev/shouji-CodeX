@@ -4,12 +4,14 @@ import android.os.Handler
 import android.os.Looper
 import com.qwe.codexmobile.model.ApprovalItem
 import com.qwe.codexmobile.model.ApprovalQuestion
+import com.qwe.codexmobile.model.BootstrapPayload
 import com.qwe.codexmobile.model.ChatItem
 import com.qwe.codexmobile.model.ConnectionConfig
 import com.qwe.codexmobile.model.HostEvent
 import com.qwe.codexmobile.model.HostStats
 import com.qwe.codexmobile.model.ThreadSummary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -19,6 +21,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import java.io.IOException
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 
 data class FileAttachmentPayload(
     val name: String,
@@ -28,15 +33,23 @@ data class FileAttachmentPayload(
 
 class HostApiClient {
     private val client = OkHttpClient()
+    private val resilientGetClient = client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS)
+        .build()
+    private val socketClient = client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var webSocket: WebSocket? = null
+    @Volatile
+    private var intentionalSocketClose = false
 
     private fun shouldSuppressSocketCloseMessage(message: String): Boolean {
         val normalized = message.trim()
-        if (normalized.isBlank()) {
-            return true
-        }
-
         return normalized == "界面关闭" ||
             normalized.contains("Software caused connection abort", ignoreCase = true)
     }
@@ -46,7 +59,7 @@ class HostApiClient {
     }
 
     suspend fun listThreads(config: ConnectionConfig): List<ThreadSummary> {
-        val response = getJson(config, "/api/threads")
+        val response = getJson(config, "/api/threads", httpClient = resilientGetClient, retryCount = 1)
         val items = response.getJSONArray("threads")
         return buildList {
             for (index in 0 until items.length()) {
@@ -56,7 +69,7 @@ class HostApiClient {
     }
 
     suspend fun getThreadItems(config: ConnectionConfig, threadId: String): List<ChatItem> {
-        val response = getJson(config, "/api/threads/$threadId")
+        val response = getJson(config, "/api/threads/$threadId", httpClient = resilientGetClient, retryCount = 2)
         val items = response.getJSONObject("thread").getJSONArray("items")
         return buildList {
             for (index in 0 until items.length()) {
@@ -66,14 +79,26 @@ class HostApiClient {
     }
 
     suspend fun getStats(config: ConnectionConfig): HostStats {
-        val response = getJson(config, "/api/config")
-        return HostStats(
-            clientCount = response.optInt("clientCount", 0),
-            pendingApprovals = response.optInt("pendingApprovals", 0),
-            serviceStatus = response.optString("serviceStatus", "stopped"),
-            codexReady = response.optBoolean("codexReady", false),
-            lastError = response.optString("errorMessage"),
-            workspacePath = response.optString("workspacePath", "")
+        val response = getJson(config, "/api/config", httpClient = resilientGetClient, retryCount = 1)
+        return parseHostStats(response)
+    }
+
+    suspend fun getBootstrap(config: ConnectionConfig): BootstrapPayload {
+        val response = getJson(config, "/api/bootstrap", httpClient = resilientGetClient, retryCount = 1)
+        val threadItems = response.getJSONArray("threads")
+        val approvalItems = response.getJSONArray("approvals")
+        return BootstrapPayload(
+            stats = parseHostStats(response.getJSONObject("stats")),
+            threads = buildList {
+                for (index in 0 until threadItems.length()) {
+                    add(parseThreadSummary(threadItems.getJSONObject(index)))
+                }
+            },
+            approvals = buildList {
+                for (index in 0 until approvalItems.length()) {
+                    add(parseApproval(approvalItems.getJSONObject(index)))
+                }
+            }
         )
     }
 
@@ -176,18 +201,31 @@ class HostApiClient {
     fun connectSocket(
         config: ConnectionConfig,
         onEvent: (HostEvent) -> Unit,
+        onOpened: () -> Unit = {},
         onClosed: (String) -> Unit
     ) {
         closeSocket()
+        intentionalSocketClose = false
+        val encodedToken = URLEncoder.encode(config.token.trim(), Charsets.UTF_8.name())
         val request = Request.Builder()
-            .url("${wsBase(config)}/ws")
+            .url("${wsBase(config)}/ws?token=$encodedToken")
             .header("Authorization", "Bearer ${config.token.trim()}")
             .build()
 
-        webSocket = client.newWebSocket(
+        webSocket = socketClient.newWebSocket(
             request,
             object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    mainHandler.post {
+                        onOpened()
+                    }
+                }
+
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (text == "pong") {
+                        return
+                    }
+
                     parseEvent(text)?.let { event ->
                         mainHandler.post {
                             onEvent(event)
@@ -196,6 +234,10 @@ class HostApiClient {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (intentionalSocketClose) {
+                        return
+                    }
+
                     val message = t.message ?: "连接已断开"
                     if (shouldSuppressSocketCloseMessage(message)) {
                         return
@@ -211,10 +253,17 @@ class HostApiClient {
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    if (reason.isNotBlank() && !shouldSuppressSocketCloseMessage(reason)) {
-                        mainHandler.post {
-                            onClosed(reason)
-                        }
+                    if (intentionalSocketClose) {
+                        return
+                    }
+
+                    val message = reason.ifBlank { "连接已断开" }
+                    if (shouldSuppressSocketCloseMessage(message)) {
+                        return
+                    }
+
+                    mainHandler.post {
+                        onClosed(message)
                     }
                 }
             }
@@ -222,17 +271,27 @@ class HostApiClient {
     }
 
     fun closeSocket() {
+        intentionalSocketClose = true
         webSocket?.close(1000, "界面关闭")
         webSocket = null
     }
 
     private suspend fun getJson(config: ConnectionConfig, path: String): JSONObject = withContext(Dispatchers.IO) {
+        getJson(config, path, client, 0)
+    }
+
+    private suspend fun getJson(
+        config: ConnectionConfig,
+        path: String,
+        httpClient: OkHttpClient,
+        retryCount: Int
+    ): JSONObject = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("${httpBase(config)}$path")
             .header("Authorization", "Bearer ${config.token.trim()}")
             .build()
 
-        client.newCall(request).execute().use(::parseJsonResponse)
+        executeJsonWithRetry(httpClient, request, retryCount)
     }
 
     private suspend fun postJson(
@@ -267,6 +326,41 @@ class HostApiClient {
         }
 
         return JSONObject(body)
+    }
+
+    private suspend fun executeJsonWithRetry(client: OkHttpClient, request: Request, retryCount: Int): JSONObject {
+        var attempt = 0
+        var lastError: IOException? = null
+
+        while (attempt <= retryCount) {
+            try {
+                return client.newCall(request).execute().use(::parseJsonResponse)
+            } catch (error: IOException) {
+                lastError = error
+                if (!shouldRetryRequest(error, attempt, retryCount)) {
+                    throw error
+                }
+                delay(350L * (attempt + 1))
+            }
+            attempt += 1
+        }
+
+        throw lastError ?: IOException("请求失败")
+    }
+
+    private fun shouldRetryRequest(error: IOException, attempt: Int, retryCount: Int): Boolean {
+        if (attempt >= retryCount) {
+            return false
+        }
+
+        val message = error.message?.lowercase().orEmpty()
+        return message.contains("unexpected end of stream") ||
+            message.contains("connection reset") ||
+            message.contains("stream was reset") ||
+            message.contains("timeout") ||
+            message.contains("canceled") ||
+            message.contains("broken pipe") ||
+            message.contains("failed to connect")
     }
 
     private fun httpBase(config: ConnectionConfig): String {
@@ -314,6 +408,17 @@ class HostApiClient {
             preview = json.optString("preview"),
             status = json.optString("status", "idle"),
             updatedAt = json.optLong("updatedAt", 0L)
+        )
+    }
+
+    private fun parseHostStats(json: JSONObject): HostStats {
+        return HostStats(
+            clientCount = json.optInt("clientCount", 0),
+            pendingApprovals = json.optInt("pendingApprovals", 0),
+            serviceStatus = json.optString("serviceStatus", "stopped"),
+            codexReady = json.optBoolean("codexReady", false),
+            lastError = json.optString("errorMessage"),
+            workspacePath = json.optString("workspacePath", "")
         )
     }
 

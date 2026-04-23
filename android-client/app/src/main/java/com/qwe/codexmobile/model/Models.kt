@@ -30,6 +30,12 @@ data class HostStats(
     val workspacePath: String = ""
 )
 
+data class BootstrapPayload(
+    val stats: HostStats,
+    val threads: List<ThreadSummary>,
+    val approvals: List<ApprovalItem>
+)
+
 data class ChatItem(
     val id: String,
     val turnId: String,

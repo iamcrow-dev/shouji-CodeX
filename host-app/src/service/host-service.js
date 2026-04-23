@@ -1,6 +1,7 @@
 import http from "node:http";
 import EventEmitter from "node:events";
 import { existsSync, statSync } from "node:fs";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import express from "express";
 import { WebSocketServer } from "ws";
 import { CodexBridge } from "./codex-bridge.js";
@@ -9,6 +10,7 @@ import { inspectThreadArtifacts, purgeThreadArtifacts } from "./thread-storage.j
 const PURGE_RETRY_ATTEMPTS = 12;
 const PURGE_RETRY_DELAY_MS = 250;
 const PURGE_SETTLE_DELAY_MS = 400;
+const COMPRESS_MIN_BYTES = 1024;
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -21,6 +23,68 @@ function jsonMessage(type, payload = {}) {
     type,
     ...payload
   });
+}
+
+function acceptsEncoding(request, value) {
+  const header = String(request.headers["accept-encoding"] || "");
+  return header.toLowerCase().includes(value);
+}
+
+function sendJson(response, statusCode, payload) {
+  response.status(statusCode).json(payload);
+}
+
+function sendCompressedJson(request, response, statusCode, payload) {
+  const body = Buffer.from(JSON.stringify(payload));
+  response.setHeader("Vary", "Accept-Encoding");
+
+  if (body.length < COMPRESS_MIN_BYTES) {
+    response.status(statusCode);
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Content-Length", String(body.length));
+    response.end(body);
+    return;
+  }
+
+  if (acceptsEncoding(request, "br")) {
+    const compressed = brotliCompressSync(body, {
+      params: {
+        [zlibConstants.BROTLI_PARAM_QUALITY]: 4
+      }
+    });
+    response.status(statusCode);
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Content-Encoding", "br");
+    response.setHeader("Content-Length", String(compressed.length));
+    response.end(compressed);
+    return;
+  }
+
+  if (acceptsEncoding(request, "gzip")) {
+    const compressed = gzipSync(body, { level: 6 });
+    response.status(statusCode);
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Content-Encoding", "gzip");
+    response.setHeader("Content-Length", String(compressed.length));
+    response.end(compressed);
+    return;
+  }
+
+  response.status(statusCode);
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Content-Length", String(body.length));
+  response.end(body);
+}
+
+function mapHostStats(state) {
+  return {
+    clientCount: state.clientCount,
+    pendingApprovals: state.pendingApprovals,
+    serviceStatus: state.status,
+    codexReady: state.codexReady,
+    errorMessage: state.errorMessage,
+    workspacePath: state.workspacePath
+  };
 }
 
 function getBearerToken(headerValue) {
@@ -186,6 +250,23 @@ export class HostService extends EventEmitter {
         client.send(data);
       }
     }
+  }
+
+  async buildBootstrapPayload() {
+    const [threads, approvals] = await Promise.all([
+      this.codexBridge.listThreads({ cwd: this.workspacePath }),
+      Promise.resolve(
+        this.codexBridge
+          .listPendingApprovals()
+          .filter((approval) => !approval.threadId || !this.isThreadHardDeleted(approval.threadId))
+      )
+    ]);
+
+    return {
+      stats: mapHostStats(this.getState()),
+      threads: this.filterHardDeletedThreads(threads),
+      approvals
+    };
   }
 
   isAuthorized(request) {
@@ -356,13 +437,24 @@ export class HostService extends EventEmitter {
       response.json({
         ok: true,
         port: this.port,
-        workspacePath: this.workspacePath,
-        clientCount: this.state.clientCount,
-        pendingApprovals: this.state.pendingApprovals,
-        serviceStatus: this.state.status,
-        codexReady: this.state.codexReady,
-        errorMessage: this.state.errorMessage
+        ...mapHostStats(this.getState())
       });
+    });
+
+    this.httpApp.get("/api/bootstrap", (request, response) => {
+      this.buildBootstrapPayload()
+        .then((payload) => {
+          sendCompressedJson(request, response, 200, {
+            ok: true,
+            ...payload
+          });
+        })
+        .catch((error) => {
+          sendJson(response, 500, {
+            ok: false,
+            message: error.message
+          });
+        });
     });
 
     this.httpApp.post("/api/config/workspace", async (request, response) => {
@@ -380,17 +472,17 @@ export class HostService extends EventEmitter {
       }
     });
 
-    this.httpApp.get("/api/threads", (_request, response) => {
+    this.httpApp.get("/api/threads", (request, response) => {
       this.codexBridge
         .listThreads({ cwd: this.workspacePath })
         .then((threads) => {
-          response.json({
+          sendCompressedJson(request, response, 200, {
             ok: true,
             threads: this.filterHardDeletedThreads(threads)
           });
         })
         .catch((error) => {
-          response.status(500).json({
+          sendJson(response, 500, {
             ok: false,
             message: error.message
           });
@@ -406,13 +498,13 @@ export class HostService extends EventEmitter {
       this.codexBridge
         .readThread(request.params.id)
         .then((thread) => {
-          response.json({
+          sendCompressedJson(request, response, 200, {
             ok: true,
             thread
           });
         })
         .catch((error) => {
-          response.status(500).json({
+          sendJson(response, 500, {
             ok: false,
             message: error.message
           });
