@@ -149,6 +149,89 @@ function summarizeFileChange(change) {
   return change.path || change.file || change.newPath || "";
 }
 
+function truncateText(value, maxLength = 320) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength).trimEnd()}…`;
+}
+
+function summarizeToolArguments(argumentsValue) {
+  if (!argumentsValue) {
+    return "";
+  }
+
+  if (typeof argumentsValue === "string") {
+    return truncateText(argumentsValue, 220);
+  }
+
+  if (typeof argumentsValue === "object") {
+    try {
+      return truncateText(JSON.stringify(argumentsValue, null, 0), 220);
+    } catch {
+      return "";
+    }
+  }
+
+  return truncateText(String(argumentsValue), 220);
+}
+
+function summarizeToolError(errorValue) {
+  if (!errorValue) {
+    return "";
+  }
+
+  if (typeof errorValue === "string") {
+    return truncateText(errorValue, 220);
+  }
+
+  try {
+    return truncateText(JSON.stringify(errorValue, null, 0), 220);
+  } catch {
+    return truncateText(String(errorValue), 220);
+  }
+}
+
+function summarizeToolCall(item) {
+  const tool = item.tool || item.name || "tool_call";
+  const lines = [`工具：${tool}`];
+
+  if (item.server) {
+    lines.push(`服务：${item.server}`);
+  }
+
+  if (tool === "get_app_state" && item.arguments?.app) {
+    lines.push(`应用：${item.arguments.app}`);
+    lines.push("详细窗口树和页面结构已省略。");
+  } else {
+    const argumentSummary = summarizeToolArguments(item.arguments);
+    if (argumentSummary) {
+      lines.push(`参数：${argumentSummary}`);
+    }
+  }
+
+  if (item.status) {
+    lines.push(`状态：${item.status}`);
+  }
+
+  const errorSummary = summarizeToolError(item.error);
+  if (errorSummary) {
+    lines.push(`错误：${errorSummary}`);
+  }
+
+  if (Number.isFinite(item.durationMs) && item.durationMs > 0) {
+    lines.push(`耗时：${item.durationMs}ms`);
+  }
+
+  return lines.join("\n");
+}
+
 function extractApprovalDetails(serverRequest) {
   const details = [];
   const params = serverRequest.params || {};
@@ -989,22 +1072,10 @@ export class CodexBridge extends EventEmitter {
 
     const limitedEntries =
       flattened.length > MAX_THREAD_ITEMS ? flattened.slice(flattened.length - MAX_THREAD_ITEMS) : flattened;
-    const keptTurnIds = new Set(limitedEntries.map((entry) => entry.turn.id));
-    const keptItemIds = new Set(limitedEntries.map((entry) => entry.item.id));
     const items = limitedEntries.map((entry) => this.normalizeThreadItem(entry.item, entry.turn.id, entry.turn));
 
     return {
       ...normalizedThread,
-      turns: (thread.turns || [])
-        .filter((turn) => keptTurnIds.has(turn.id))
-        .map((turn) => ({
-          id: turn.id,
-          status: turn.status,
-          error: turn.error,
-          items: (turn.items || [])
-            .filter((item) => keptItemIds.has(item.id))
-            .map((item) => this.normalizeThreadItem(item, turn.id, turn))
-        })),
       items
     };
   }
@@ -1083,11 +1154,22 @@ export class CodexBridge extends EventEmitter {
       };
     }
 
+    if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
+      return {
+        id: item.id,
+        turnId,
+        type: "tool_call",
+        status: item.status,
+        text: summarizeToolCall(item),
+        timestamp
+      };
+    }
+
     return {
       id: item.id,
       turnId,
       type: item.type,
-      raw: item,
+      text: truncateText(JSON.stringify(item, null, 0), 400),
       timestamp
     };
   }
