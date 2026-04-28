@@ -9,7 +9,6 @@ const MAX_THREAD_ITEMS = 330;
 
 function summarizeUserContent(contentItems = []) {
   const textLines = [];
-  let imageCount = 0;
 
   for (const item of contentItems) {
     if (item.type === "text" || item.type === "input_text") {
@@ -18,17 +17,82 @@ function summarizeUserContent(contentItems = []) {
       }
       continue;
     }
-
-    if (item.type === "input_image") {
-      imageCount += 1;
-    }
-  }
-
-  if (imageCount > 0) {
-    textLines.push(`[图片 ${imageCount} 张]`);
   }
 
   return textLines.join("\n");
+}
+
+function extractImageSource(value) {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (typeof value === "object") {
+    const directCandidates = [
+      value.url,
+      value.image_url,
+      value.imageUrl,
+      value.sourceUrl,
+      value.src,
+      value.href
+    ];
+
+    for (const candidate of directCandidates) {
+      const resolved = extractImageSource(candidate);
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
+  return "";
+}
+
+function extractImageMimeType(sourceUrl, explicitMimeType = "") {
+  if (typeof explicitMimeType === "string" && explicitMimeType.trim()) {
+    return explicitMimeType.trim();
+  }
+
+  if (typeof sourceUrl !== "string" || !sourceUrl.startsWith("data:")) {
+    return "";
+  }
+
+  const match = /^data:([^;,]+)/i.exec(sourceUrl);
+  return match?.[1]?.trim() || "";
+}
+
+function extractUserImages(contentItems = []) {
+  const images = [];
+
+  for (const [index, item] of contentItems.entries()) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    if (item.type !== "input_image" && item.type !== "image") {
+      continue;
+    }
+
+    const sourceUrl = extractImageSource(item);
+    if (!sourceUrl) {
+      continue;
+    }
+
+    images.push({
+      id: item.id || `img_${index + 1}`,
+      sourceUrl,
+      mimeType: extractImageMimeType(
+        sourceUrl,
+        item.mimeType || item.mime_type || item.mediaType || item.contentType || ""
+      )
+    });
+  }
+
+  return images;
 }
 
 function normalizeTimestamp(value) {
@@ -227,6 +291,31 @@ function summarizeToolCall(item) {
 
   if (Number.isFinite(item.durationMs) && item.durationMs > 0) {
     lines.push(`耗时：${item.durationMs}ms`);
+  }
+
+  return lines.join("\n");
+}
+
+function summarizeWebSearch(item) {
+  const action = item.action && typeof item.action === "object" ? item.action : {};
+  const actionType = action.type || "";
+  const lines = [];
+
+  if (actionType === "search") {
+    lines.push(`搜索：${truncateText(item.query || action.query || "（空查询）", 200)}`);
+  } else if (actionType === "openPage") {
+    lines.push(`打开页面：${truncateText(action.url || item.query || "（未知页面）", 220)}`);
+  } else if (actionType === "findInPage") {
+    lines.push(`页内查找：${truncateText(action.pattern || item.query || "（空模式）", 180)}`);
+    if (action.url) {
+      lines.push(`页面：${truncateText(action.url, 220)}`);
+    }
+  } else {
+    lines.push(`网页检索：${truncateText(item.query || "（无摘要）", 200)}`);
+  }
+
+  if (item.status) {
+    lines.push(`状态：${item.status}`);
   }
 
   return lines.join("\n");
@@ -1092,6 +1181,7 @@ export class CodexBridge extends EventEmitter {
         type: "message",
         role: "user",
         text: summarizeUserContent(item.content),
+        images: extractUserImages(item.content),
         timestamp
       };
     }
@@ -1150,6 +1240,17 @@ export class CodexBridge extends EventEmitter {
         type: "file_change",
         status: item.status,
         changes: item.changes,
+        timestamp
+      };
+    }
+
+    if (item.type === "webSearch") {
+      return {
+        id: item.id,
+        turnId,
+        type: "web_search",
+        status: item.status,
+        text: summarizeWebSearch(item),
         timestamp
       };
     }

@@ -36,12 +36,19 @@ data class BootstrapPayload(
     val approvals: List<ApprovalItem>
 )
 
+data class ChatImage(
+    val id: String,
+    val url: String,
+    val mimeType: String = ""
+)
+
 data class ChatItem(
     val id: String,
     val turnId: String,
     val type: String,
     val role: String? = null,
     val text: String = "",
+    val images: List<ChatImage> = emptyList(),
     val status: String? = null,
     val timestamp: Long = 0L
 )

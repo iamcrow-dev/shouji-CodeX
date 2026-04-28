@@ -6,10 +6,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
-  ipcMain,
-  shell,
-  systemPreferences
+  ipcMain
 } from "electron";
 import { ConfigStore } from "./config-store.js";
 import { HostService } from "./service/host-service.js";
@@ -22,7 +19,6 @@ const hostIconPath = path.join(__dirname, "..", "assets", "codex-icon.png");
 let mainWindow = null;
 let configStore = null;
 let hostService = null;
-let accessibilityPromptShown = false;
 
 function getPrimaryAddress() {
   const interfaces = os.networkInterfaces();
@@ -70,43 +66,6 @@ function sendStateUpdate() {
   mainWindow.webContents.send("state:updated", buildRendererState());
 }
 
-function hasAccessibilityPermission(prompt = false) {
-  if (process.platform !== "darwin") {
-    return true;
-  }
-
-  return systemPreferences.isTrustedAccessibilityClient(prompt);
-}
-
-async function ensureAccessibilityPermission({ prompt = false } = {}) {
-  if (process.platform !== "darwin") {
-    return true;
-  }
-
-  const granted = hasAccessibilityPermission(prompt);
-  if (granted || !prompt || accessibilityPromptShown) {
-    return granted;
-  }
-
-  accessibilityPromptShown = true;
-  const result = await dialog.showMessageBox({
-    type: "warning",
-    buttons: ["打开系统设置", "稍后处理"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "需要辅助功能权限",
-    message: "CodeX桌面端执行 /Computer use 任务需要 macOS 辅助功能权限。",
-    detail:
-      "请在“系统设置 > 隐私与安全性 > 辅助功能”里启用“CodeX桌面端by.冰点零度”。完成后重新发起任务。首次发起 Computer Use 时，系统还会对自动化控制弹出单独授权。 "
-  });
-
-  if (result.response === 0) {
-    await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
-  }
-
-  return granted;
-}
-
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 980,
@@ -130,7 +89,6 @@ function registerIpcHandlers() {
   ipcMain.handle("app:get-state", () => buildRendererState());
 
   ipcMain.handle("service:start", async () => {
-    await ensureAccessibilityPermission({ prompt: true });
     const config = configStore.get();
     await hostService.start(config);
     sendStateUpdate();
@@ -197,6 +155,7 @@ async function bootstrap() {
   hostService = new HostService({
     bypassPermissions: configStore.get().bypassPermissions,
     autoApprove: configStore.get().autoApprove,
+    assetDirectory: path.join(app.getPath("userData"), "thread-assets"),
     onWorkspacePathChange: (workspacePath) => {
       configStore.update({ workspacePath });
     }
@@ -215,7 +174,6 @@ async function bootstrap() {
 
   registerIpcHandlers();
   await createWindow();
-  await ensureAccessibilityPermission({ prompt: true });
 
   if (configStore.get().autoStartService) {
     try {

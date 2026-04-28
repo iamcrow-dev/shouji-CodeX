@@ -12,6 +12,7 @@ import android.widget.TextView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -23,8 +24,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -68,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -99,6 +103,7 @@ import com.qwe.codexmobile.model.ConnectionConfig
 import com.qwe.codexmobile.model.HostEvent
 import com.qwe.codexmobile.model.HostStats
 import com.qwe.codexmobile.model.ThreadSummary
+import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import kotlinx.coroutines.Dispatchers
@@ -1459,6 +1464,27 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                             bodyText,
                             color = foreground,
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp)
+                        )
+                    }
+                }
+            }
+
+            if (item.images.isNotEmpty()) {
+                if (bodyText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item.images.forEach { image ->
+                        AsyncImage(
+                            model = image.url,
+                            contentDescription = "聊天图片",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .widthIn(max = 240.dp)
+                                .heightIn(max = 260.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.White.copy(alpha = if (isUser) 0.18f else 0.45f))
                         )
                     }
                 }

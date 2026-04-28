@@ -1,6 +1,9 @@
 import http from "node:http";
 import EventEmitter from "node:events";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import express from "express";
 import { WebSocketServer } from "ws";
@@ -11,6 +14,15 @@ const PURGE_RETRY_ATTEMPTS = 12;
 const PURGE_RETRY_DELAY_MS = 250;
 const PURGE_SETTLE_DELAY_MS = 400;
 const COMPRESS_MIN_BYTES = 1024;
+const IMAGE_EXTENSION_BY_MIME = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "image/heic": "heic",
+  "image/heif": "heif"
+};
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -100,6 +112,30 @@ function getBearerToken(headerValue) {
   return token.trim();
 }
 
+function isRemoteImageUrl(value) {
+  return /^https?:\/\//i.test(String(value || ""));
+}
+
+function parseDataUrl(value) {
+  const match = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/is.exec(String(value || ""));
+  if (!match) {
+    return null;
+  }
+
+  try {
+    return {
+      mimeType: match[1].trim() || "application/octet-stream",
+      buffer: Buffer.from(match[2], "base64")
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extensionForMimeType(mimeType) {
+  return IMAGE_EXTENSION_BY_MIME[String(mimeType || "").toLowerCase()] || "bin";
+}
+
 export class HostService extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -116,6 +152,8 @@ export class HostService extends EventEmitter {
     this.workspacePath = "";
     this.bypassPermissions = options.bypassPermissions !== false;
     this.hardDeletedThreadIds = new Set();
+    this.assetDirectory = options.assetDirectory || path.join(process.cwd(), ".codex-mobile-assets");
+    this.assetIndex = new Map();
     this.onWorkspacePathChange =
       typeof options.onWorkspacePathChange === "function" ? options.onWorkspacePathChange : () => {};
     this.state = {
@@ -266,6 +304,94 @@ export class HostService extends EventEmitter {
       stats: mapHostStats(this.getState()),
       threads: this.filterHardDeletedThreads(threads),
       approvals
+    };
+  }
+
+  buildAssetUrl(assetId) {
+    return `/api/assets/${encodeURIComponent(assetId)}?token=${encodeURIComponent(this.token)}`;
+  }
+
+  async materializeDataUrlAsset(sourceUrl, preferredMimeType = "") {
+    const parsed = parseDataUrl(sourceUrl);
+    if (!parsed) {
+      return null;
+    }
+
+    const mimeType = preferredMimeType || parsed.mimeType;
+    const assetId =
+      createHash("sha1")
+        .update(mimeType)
+        .update("\n")
+        .update(parsed.buffer)
+        .digest("hex");
+    const filePath = path.join(this.assetDirectory, `${assetId}.${extensionForMimeType(mimeType)}`);
+
+    this.assetIndex.set(assetId, {
+      filePath,
+      mimeType
+    });
+
+    if (!existsSync(filePath)) {
+      await mkdir(this.assetDirectory, { recursive: true });
+      await writeFile(filePath, parsed.buffer);
+    }
+
+    return {
+      id: assetId,
+      url: this.buildAssetUrl(assetId),
+      mimeType
+    };
+  }
+
+  async materializeClientImages(images = []) {
+    const resolved = [];
+
+    for (const [index, image] of images.entries()) {
+      const sourceUrl = String(image?.sourceUrl || image?.url || "").trim();
+      if (!sourceUrl) {
+        continue;
+      }
+
+      const imageId = String(image?.id || `img_${index + 1}`);
+      const mimeType = String(image?.mimeType || "").trim();
+
+      if (sourceUrl.startsWith("data:")) {
+        const asset = await this.materializeDataUrlAsset(sourceUrl, mimeType);
+        if (asset) {
+          resolved.push(asset);
+        }
+        continue;
+      }
+
+      if (isRemoteImageUrl(sourceUrl)) {
+        resolved.push({
+          id: imageId,
+          url: sourceUrl,
+          mimeType
+        });
+      }
+    }
+
+    return resolved;
+  }
+
+  async prepareThreadForClient(thread) {
+    const items = await Promise.all(
+      (thread.items || []).map(async (item) => {
+        if (!Array.isArray(item.images) || item.images.length === 0) {
+          return item;
+        }
+
+        return {
+          ...item,
+          images: await this.materializeClientImages(item.images)
+        };
+      })
+    );
+
+    return {
+      ...thread,
+      items
     };
   }
 
@@ -472,6 +598,32 @@ export class HostService extends EventEmitter {
       }
     });
 
+    this.httpApp.get("/api/assets/:assetId", (request, response) => {
+      const asset = this.assetIndex.get(String(request.params.assetId));
+      if (!asset || !existsSync(asset.filePath)) {
+        sendJson(response, 404, {
+          ok: false,
+          message: "图片资源不存在"
+        });
+        return;
+      }
+
+      if (asset.mimeType) {
+        response.type(asset.mimeType);
+      }
+
+      response.sendFile(asset.filePath, (error) => {
+        if (!error || response.headersSent) {
+          return;
+        }
+
+        sendJson(response, error.statusCode || 500, {
+          ok: false,
+          message: "图片资源读取失败"
+        });
+      });
+    });
+
     this.httpApp.get("/api/threads", (request, response) => {
       this.codexBridge
         .listThreads({ cwd: this.workspacePath })
@@ -497,6 +649,7 @@ export class HostService extends EventEmitter {
 
       this.codexBridge
         .readThread(request.params.id)
+        .then((thread) => this.prepareThreadForClient(thread))
         .then((thread) => {
           sendCompressedJson(request, response, 200, {
             ok: true,

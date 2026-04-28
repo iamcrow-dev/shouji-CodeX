@@ -5,6 +5,7 @@ import android.os.Looper
 import com.qwe.codexmobile.model.ApprovalItem
 import com.qwe.codexmobile.model.ApprovalQuestion
 import com.qwe.codexmobile.model.BootstrapPayload
+import com.qwe.codexmobile.model.ChatImage
 import com.qwe.codexmobile.model.ChatItem
 import com.qwe.codexmobile.model.ConnectionConfig
 import com.qwe.codexmobile.model.HostEvent
@@ -73,7 +74,7 @@ class HostApiClient {
         val items = response.getJSONObject("thread").getJSONArray("items")
         return buildList {
             for (index in 0 until items.length()) {
-                add(parseChatItem(items.getJSONObject(index)))
+                add(parseChatItem(config, items.getJSONObject(index)))
             }
         }
     }
@@ -422,13 +423,35 @@ class HostApiClient {
         )
     }
 
-    private fun parseChatItem(json: JSONObject): ChatItem {
+    private fun resolveMediaUrl(config: ConnectionConfig, rawUrl: String): String {
+        val trimmed = rawUrl.trim()
+        if (trimmed.isBlank()) {
+            return ""
+        }
+
+        if (
+            trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("data:", ignoreCase = true)
+        ) {
+            return trimmed
+        }
+
+        return if (trimmed.startsWith("/")) {
+            "${httpBase(config)}$trimmed"
+        } else {
+            "${httpBase(config)}/$trimmed"
+        }
+    }
+
+    private fun parseChatItem(config: ConnectionConfig, json: JSONObject): ChatItem {
         val rawTimestamp = json.optLong("timestamp", 0L)
         val normalizedTimestamp = when {
             rawTimestamp <= 0L -> 0L
             rawTimestamp < 1_000_000_000_000L -> rawTimestamp * 1000
             else -> rawTimestamp
         }
+        val imageArray = json.optJSONArray("images")
 
         return ChatItem(
             id = json.getString("id"),
@@ -436,6 +459,24 @@ class HostApiClient {
             type = json.optString("type"),
             role = json.optString("role").ifBlank { null },
             text = json.optString("text"),
+            images = buildList {
+                if (imageArray != null) {
+                    for (index in 0 until imageArray.length()) {
+                        val image = imageArray.optJSONObject(index) ?: continue
+                        val url = resolveMediaUrl(config, image.optString("url"))
+                        if (url.isBlank()) {
+                            continue
+                        }
+                        add(
+                            ChatImage(
+                                id = image.optString("id", "img_${index + 1}"),
+                                url = url,
+                                mimeType = image.optString("mimeType")
+                            )
+                        )
+                    }
+                }
+            },
             status = json.optString("status").ifBlank { null },
             timestamp = normalizedTimestamp
         )
