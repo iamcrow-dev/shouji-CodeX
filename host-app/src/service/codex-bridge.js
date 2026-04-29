@@ -321,6 +321,82 @@ function summarizeWebSearch(item) {
   return lines.join("\n");
 }
 
+function normalizeImageGenerationSource(sourceValue, mimeType = "") {
+  if (typeof sourceValue !== "string") {
+    return "";
+  }
+
+  const trimmed = sourceValue.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("data:") || /^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const normalized = trimmed.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=]+$/.test(normalized) || normalized.length < 128) {
+    return "";
+  }
+
+  const resolvedMimeType = mimeType || "image/png";
+  return `data:${resolvedMimeType};base64,${normalized}`;
+}
+
+function extractGeneratedImages(item) {
+  if (!item || typeof item !== "object") {
+    return [];
+  }
+
+  const mimeType =
+    String(item.mimeType || item.mime_type || item.mediaType || item.contentType || "").trim() || "image/png";
+  const sources = [];
+
+  if (typeof item.result === "string" && item.result.trim()) {
+    sources.push(item.result);
+  }
+
+  if (typeof item.imageUrl === "string" && item.imageUrl.trim()) {
+    sources.push(item.imageUrl);
+  }
+
+  if (typeof item.url === "string" && item.url.trim()) {
+    sources.push(item.url);
+  }
+
+  if (Array.isArray(item.images)) {
+    for (const image of item.images) {
+      if (typeof image === "string") {
+        sources.push(image);
+        continue;
+      }
+
+      if (image && typeof image === "object") {
+        sources.push(
+          image.url || image.image_url || image.imageUrl || image.sourceUrl || image.src || image.href || image.result || ""
+        );
+      }
+    }
+  }
+
+  const resolved = [];
+  for (const [index, source] of sources.entries()) {
+    const sourceUrl = normalizeImageGenerationSource(source, mimeType);
+    if (!sourceUrl) {
+      continue;
+    }
+
+    resolved.push({
+      id: `${item.id || "generated_image"}_${index + 1}`,
+      sourceUrl,
+      mimeType
+    });
+  }
+
+  return resolved;
+}
+
 function extractApprovalDetails(serverRequest) {
   const details = [];
   const params = serverRequest.params || {};
@@ -1262,6 +1338,19 @@ export class CodexBridge extends EventEmitter {
         type: "tool_call",
         status: item.status,
         text: summarizeToolCall(item),
+        timestamp
+      };
+    }
+
+    if (item.type === "imageGeneration") {
+      const images = extractGeneratedImages(item);
+      return {
+        id: item.id,
+        turnId,
+        type: "message",
+        role: "assistant",
+        text: images.length > 0 ? "" : truncateText(item.revisedPrompt || "已生成图片", 220),
+        images,
         timestamp
       };
     }

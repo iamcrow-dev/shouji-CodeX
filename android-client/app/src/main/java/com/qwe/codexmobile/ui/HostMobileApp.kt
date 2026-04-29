@@ -90,6 +90,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -99,6 +101,7 @@ import com.qwe.codexmobile.data.HostPreferences
 import com.qwe.codexmobile.model.ApprovalItem
 import com.qwe.codexmobile.model.ApprovalQuestion
 import com.qwe.codexmobile.model.ChatItem
+import com.qwe.codexmobile.model.ChatImage
 import com.qwe.codexmobile.model.ConnectionConfig
 import com.qwe.codexmobile.model.HostEvent
 import com.qwe.codexmobile.model.HostStats
@@ -1393,6 +1396,7 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
     }
     var actionMenuVisible by remember(item.id) { mutableStateOf(false) }
     var selectionDialogVisible by remember(item.id) { mutableStateOf(false) }
+    var previewImage by remember(item.id) { mutableStateOf<ChatImage?>(null) }
     val bodyText = item.text.ifBlank { item.status.orEmpty() }
 
     Box(
@@ -1485,6 +1489,9 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                                 .heightIn(max = 260.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(Color.White.copy(alpha = if (isUser) 0.18f else 0.45f))
+                                .clickable {
+                                    previewImage = image
+                                }
                         )
                     }
                 }
@@ -1539,6 +1546,35 @@ private fun MessageBubble(item: ChatItem, onTap: () -> Unit) {
                 }
             }
         )
+    }
+
+    previewImage?.let { image ->
+        Dialog(
+            onDismissRequest = { previewImage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.92f))
+                    .clickable {
+                        previewImage = null
+                    }
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = image.url,
+                    contentDescription = "聊天图片预览",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxSize()
+                )
+            }
+        }
     }
 }
 
