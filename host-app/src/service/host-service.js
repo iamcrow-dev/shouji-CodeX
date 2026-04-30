@@ -1,9 +1,12 @@
 import http from "node:http";
 import EventEmitter from "node:events";
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import express from "express";
 import { WebSocketServer } from "ws";
@@ -14,6 +17,9 @@ const PURGE_RETRY_ATTEMPTS = 12;
 const PURGE_RETRY_DELAY_MS = 250;
 const PURGE_SETTLE_DELAY_MS = 400;
 const COMPRESS_MIN_BYTES = 1024;
+const SIPS_BINARY_PATH = "/usr/bin/sips";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_PRESERVED_CHUNKS = new Set(["IHDR", "PLTE", "IDAT", "IEND", "tRNS"]);
 const IMAGE_EXTENSION_BY_MIME = {
   "image/jpeg": "jpg",
   "image/jpg": "jpg",
@@ -23,6 +29,14 @@ const IMAGE_EXTENSION_BY_MIME = {
   "image/heic": "heic",
   "image/heif": "heif"
 };
+const SIPS_FORMAT_BY_MIME = {
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "image/png": "png"
+};
+const MOBILE_FRIENDLY_JPEG_MAX_EDGE = 1600;
+const MOBILE_FRIENDLY_JPEG_QUALITY = "85";
+const execFileAsync = promisify(execFile);
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -134,6 +148,147 @@ function parseDataUrl(value) {
 
 function extensionForMimeType(mimeType) {
   return IMAGE_EXTENSION_BY_MIME[String(mimeType || "").toLowerCase()] || "bin";
+}
+
+function isPngBuffer(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.length >= PNG_SIGNATURE.length && buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
+function shouldReencodeAssetBuffer(buffer, mimeType) {
+  return String(mimeType || "").toLowerCase() === "image/png" && isPngBuffer(buffer);
+}
+
+function createCrc32Table() {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) {
+    value = CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function stripPngAncillaryChunks(buffer) {
+  if (!isPngBuffer(buffer)) {
+    return buffer;
+  }
+
+  const parts = [PNG_SIGNATURE];
+  let offset = PNG_SIGNATURE.length;
+  let changed = false;
+
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const chunkTypeOffset = offset + 4;
+    const chunkDataOffset = chunkTypeOffset + 4;
+    const chunkCrcOffset = chunkDataOffset + length;
+    const nextOffset = chunkCrcOffset + 4;
+
+    if (nextOffset > buffer.length) {
+      return buffer;
+    }
+
+    const chunkTypeBuffer = buffer.subarray(chunkTypeOffset, chunkDataOffset);
+    const chunkType = chunkTypeBuffer.toString("latin1");
+    const chunkData = buffer.subarray(chunkDataOffset, chunkCrcOffset);
+
+    if (PNG_PRESERVED_CHUNKS.has(chunkType)) {
+      const chunk = Buffer.allocUnsafe(length + 12);
+      chunk.writeUInt32BE(length, 0);
+      chunkTypeBuffer.copy(chunk, 4);
+      chunkData.copy(chunk, 8);
+      chunk.writeUInt32BE(crc32(Buffer.concat([chunkTypeBuffer, chunkData])), length + 8);
+      parts.push(chunk);
+    } else {
+      changed = true;
+    }
+
+    offset = nextOffset;
+    if (chunkType === "IEND") {
+      break;
+    }
+  }
+
+  return changed ? Buffer.concat(parts) : buffer;
+}
+
+async function reencodeAssetBuffer(buffer, mimeType) {
+  const normalizedMimeType = String(mimeType || "").toLowerCase();
+  if (normalizedMimeType === "image/png") {
+    return stripPngAncillaryChunks(buffer);
+  }
+  const outputFormat = SIPS_FORMAT_BY_MIME[normalizedMimeType];
+  if (!outputFormat) {
+    return buffer;
+  }
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "codex-host-asset-"));
+  const inputPath = path.join(tempDir, `source.${extensionForMimeType(normalizedMimeType)}`);
+  const outputExtension = outputFormat === "jpeg" ? "jpg" : outputFormat;
+  const outputPath = path.join(tempDir, `normalized.${outputExtension}`);
+
+  try {
+    await writeFile(inputPath, buffer);
+    await execFileAsync(SIPS_BINARY_PATH, ["-s", "format", outputFormat, inputPath, "--out", outputPath], {
+      maxBuffer: 16 * 1024 * 1024
+    });
+    const normalizedBuffer = await readFile(outputPath);
+    return normalizedBuffer.length > 0 ? normalizedBuffer : buffer;
+  } catch {
+    return buffer;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function convertImageBuffer(buffer, inputMimeType, outputMimeType, options = {}) {
+  const normalizedInputMimeType = String(inputMimeType || "").toLowerCase();
+  const normalizedOutputMimeType = String(outputMimeType || "").toLowerCase();
+  const outputFormat = SIPS_FORMAT_BY_MIME[normalizedOutputMimeType];
+  if (!outputFormat) {
+    return buffer;
+  }
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "codex-host-convert-"));
+  const inputPath = path.join(tempDir, `source.${extensionForMimeType(normalizedInputMimeType)}`);
+  const outputExtension = outputFormat === "jpeg" ? "jpg" : outputFormat;
+  const outputPath = path.join(tempDir, `converted.${outputExtension}`);
+
+  try {
+    await writeFile(inputPath, buffer);
+    const command = [inputPath, "-s", "format", outputFormat];
+
+    if (outputFormat === "jpeg") {
+      command.push("-s", "formatOptions", String(options.quality || MOBILE_FRIENDLY_JPEG_QUALITY));
+      if (Number(options.maxEdge) > 0) {
+        command.push("--resampleHeightWidthMax", String(options.maxEdge));
+      }
+    }
+
+    command.push("--out", outputPath);
+
+    await execFileAsync(SIPS_BINARY_PATH, command, {
+      maxBuffer: 16 * 1024 * 1024
+    });
+    const convertedBuffer = await readFile(outputPath);
+    return convertedBuffer.length > 0 ? convertedBuffer : buffer;
+  } catch {
+    return buffer;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export class HostService extends EventEmitter {
@@ -311,18 +466,33 @@ export class HostService extends EventEmitter {
     return `/api/assets/${encodeURIComponent(assetId)}?token=${encodeURIComponent(this.token)}`;
   }
 
-  async materializeDataUrlAsset(sourceUrl, preferredMimeType = "") {
+  async materializeDataUrlAsset(sourceUrl, preferredMimeType = "", options = {}) {
     const parsed = parseDataUrl(sourceUrl);
     if (!parsed) {
       return null;
     }
 
-    const mimeType = preferredMimeType || parsed.mimeType;
+    let mimeType = String(preferredMimeType || parsed.mimeType || "").toLowerCase() || "application/octet-stream";
+    let normalizedBuffer = shouldReencodeAssetBuffer(parsed.buffer, mimeType)
+      ? await reencodeAssetBuffer(parsed.buffer, mimeType)
+      : parsed.buffer;
+
+    if (options.preferJpeg && mimeType === "image/png") {
+      const jpegBuffer = await convertImageBuffer(normalizedBuffer, mimeType, "image/jpeg", {
+        maxEdge: options.maxEdge || MOBILE_FRIENDLY_JPEG_MAX_EDGE,
+        quality: options.quality || MOBILE_FRIENDLY_JPEG_QUALITY
+      });
+      if (jpegBuffer !== normalizedBuffer) {
+        normalizedBuffer = jpegBuffer;
+        mimeType = "image/jpeg";
+      }
+    }
+
     const assetId =
       createHash("sha1")
         .update(mimeType)
         .update("\n")
-        .update(parsed.buffer)
+        .update(normalizedBuffer)
         .digest("hex");
     const filePath = path.join(this.assetDirectory, `${assetId}.${extensionForMimeType(mimeType)}`);
 
@@ -333,7 +503,7 @@ export class HostService extends EventEmitter {
 
     if (!existsSync(filePath)) {
       await mkdir(this.assetDirectory, { recursive: true });
-      await writeFile(filePath, parsed.buffer);
+      await writeFile(filePath, normalizedBuffer);
     }
 
     return {
@@ -356,7 +526,9 @@ export class HostService extends EventEmitter {
       const mimeType = String(image?.mimeType || "").trim();
 
       if (sourceUrl.startsWith("data:")) {
-        const asset = await this.materializeDataUrlAsset(sourceUrl, mimeType);
+        const asset = await this.materializeDataUrlAsset(sourceUrl, mimeType, {
+          preferJpeg: image?.preferJpeg === true
+        });
         if (asset) {
           resolved.push(asset);
         }

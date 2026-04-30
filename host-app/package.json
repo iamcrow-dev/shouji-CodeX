@@ -1,6 +1,6 @@
 {
   "name": "codex-host-app",
-  "version": "1.2.0",
+  "version": "2.2.0",
   "private": true,
   "description": "CodeX桌面端by.冰点零度",
   "author": "qwe",
@@ -41,8 +41,8 @@
       "icon": "assets/codex-icon.icns",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "CodeX桌面端需要控制系统和其他应用，以执行 Computer Use 和自动化任务。",
-        "CFBundleShortVersionString": "1.2.0",
-        "CFBundleVersion": "1.2.0"
+        "CFBundleShortVersionString": "2.2",
+        "CFBundleVersion": "2.2"
       }
     },
     "dmg": {}

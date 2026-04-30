@@ -390,7 +390,8 @@ function extractGeneratedImages(item) {
     resolved.push({
       id: `${item.id || "generated_image"}_${index + 1}`,
       sourceUrl,
-      mimeType
+      mimeType,
+      preferJpeg: true
     });
   }
 
@@ -618,7 +619,7 @@ export class CodexBridge extends EventEmitter {
     await this.request("initialize", {
       clientInfo: {
         name: "codex-desktop-by-bingdianlingdu",
-        version: "1.2.0"
+        version: "2.2"
       },
       capabilities: {
         experimentalApi: true
